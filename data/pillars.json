@@ -1,0 +1,86 @@
+{
+  "P1": {
+    "name": "Shadow & Emotional Mastery",
+    "metrics": {
+      "emotional_sovereignty": 0,
+      "explanations_to_actions": 0,
+      "shadow_progress": 0
+    },
+    "drills": [
+      "Neural Override",
+      "3-Second Pause",
+      "Shadow Journaling"
+    ],
+    "color": "#FF6B6B"
+  },
+  "P2": {
+    "name": "Self-Mastery & Somatic",
+    "metrics": {
+      "action_latency": 0,
+      "energy_management": 0,
+      "drill_completion": 0
+    },
+    "drills": [
+      "Action Latency",
+      "Somatic Drills",
+      "Energy Management"
+    ],
+    "color": "#4ECDC4"
+  },
+  "P3": {
+    "name": "Erotic Intelligence",
+    "metrics": {
+      "relational_dynamics": 0,
+      "polarity_mastery": 0,
+      "intimacy_capacity": 0
+    },
+    "drills": [
+      "Polarity Drills",
+      "Relational Experiments",
+      "Boundary Setting"
+    ],
+    "color": "#45B7D1"
+  },
+  "P4": {
+    "name": "Spiritual Practices",
+    "metrics": {
+      "ritual_adherence": 0,
+      "meditation_consistency": 0,
+      "alpha_state": 0
+    },
+    "drills": [
+      "Morning Ritual",
+      "Evening Alignment",
+      "Meditation Timer"
+    ],
+    "color": "#96CEB4"
+  },
+  "P5": {
+    "name": "Strategy & Leadership",
+    "metrics": {
+      "strategic_clarity": 0,
+      "execution_velocity": 0,
+      "decision_quality": 0
+    },
+    "drills": [
+      "Pre-Mortem",
+      "Scenario Planning",
+      "Decision Drills"
+    ],
+    "color": "#FFEAA7"
+  },
+  "P6": {
+    "name": "Financial & Business",
+    "metrics": {
+      "revenue_growth": 0,
+      "pipeline_health": 0,
+      "cash_flow": 0
+    },
+    "drills": [
+      "Pipeline Conversion",
+      "Financial Scenarios",
+      "Abundance Mindset"
+    ],
+    "color": "#DDA0DD"
+  }
+}
