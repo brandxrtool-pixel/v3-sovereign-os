@@ -188,13 +188,12 @@ if st.session_state.get('active_drill_P2'):
             latency = end_time - start_time
             st.success(f"Action Latency: {latency:.1f}s - {'Elite' if latency < 3 else 'Good' if latency < 10 else 'Needs Work'}")
     st.markdown("</div>", unsafe_allow_html=True)
-
-# P6: BUSINESS DRILL - Enhanced with your actual numbers
+# P6: BUSINESS DRILL - FIXED
 if st.session_state.get('active_drill_P6'):
     st.markdown("<div class='card drill-active'>", unsafe_allow_html=True)
     st.markdown("### 💰 P6: Business Conversion Drill")
     
-    st.markdown(f"**Current Business:** ${biz_df['Revenue'].iloc[-1]:,} revenue | {biz_df['Clients'].iloc[-1]} clients | ${biz_df['Pipeline'].iloc[-1]:,} pipeline")
+    st.markdown(f"**Current Business:** ${revenue:,} revenue | {clients} clients | ${pipeline:,} pipeline | {close_rate*100:.0f}% close rate")
     
     scenario = st.selectbox("Business Scenario:", 
                            ["Client wants 20% discount for annual contract",
@@ -219,26 +218,120 @@ if st.session_state.get('active_drill_P6'):
                 pd.concat([biz_df, pd.DataFrame([new_row])], ignore_index=True).to_csv(BUSINESS_CSV, index=False)
                 st.success("Business updated!")
     st.markdown("</div>", unsafe_allow_html=True)
+# ENHANCED BUSINESS SECTION WITH OUTREACH TRACKING
+st.markdown("## 💼 BUSINESS & OUTREACH DASHBOARD")
 
-# ENHANCED BUSINESS SECTION - Your original business tracking
-st.markdown("## 💼 BUSINESS DASHBOARD")
+# Read business data with correct column names
+try:
+    biz_df = pd.read_csv(BUSINESS_CSV)
+    last_row = biz_df.iloc[-1]
+    
+    revenue = last_row['Revenue']
+    clients = last_row['Active_Clients']
+    pipeline = last_row['Pipeline_Value']
+    close_rate = last_row.get('Close_Rate', 0)
 
-biz_col1, biz_col2, biz_col3 = st.columns(3)
-with biz_col1:
-    st.markdown(f"<div class='business-kpi'><strong>REVENUE</strong><br><div class='metric'>${biz_df['Revenue'].iloc[-1]:,}</div></div>", unsafe_allow_html=True)
-with biz_col2:
-    st.markdown(f"<div class='business-kpi'><strong>CLIENTS</strong><br><div class='metric'>{biz_df['Clients'].iloc[-1]}</div></div>", unsafe_allow_html=True)
-with biz_col3:
-    st.markdown(f"<div class='business-kpi'><strong>PIPELINE</strong><br><div class='metric'>${biz_df['Pipeline'].iloc[-1]:,}</div></div>", unsafe_allow_html=True)
+    biz_col1, biz_col2, biz_col3, biz_col4 = st.columns(4)
+    with biz_col1:
+        st.markdown(f"<div class='business-kpi'><strong>REVENUE</strong><br><div class='metric'>${revenue:,}</div></div>", unsafe_allow_html=True)
+    with biz_col2:
+        st.markdown(f"<div class='business-kpi'><strong>CLIENTS</strong><br><div class='metric'>{clients}</div></div>", unsafe_allow_html=True)
+    with biz_col3:
+        st.markdown(f"<div class='business-kpi'><strong>PIPELINE</strong><br><div class='metric'>${pipeline:,}</div></div>", unsafe_allow_html=True)
+    with biz_col4:
+        st.markdown(f"<div class='business-kpi'><strong>CLOSE RATE</strong><br><div class='metric'>{close_rate*100:.0f}%</div></div>", unsafe_allow_html=True)
+
+except Exception as e:
+    st.error(f"Business data error: {e}")
+
+# DAILY OUTREACH TRACKER - NEW FEATURE
+st.markdown("### 📈 DAILY OUTREACH TRACKER")
+
+# Initialize outreach data
+OUTREACH_CSV = os.path.join(DATA_DIR, "outreach.csv")
+if not os.path.exists(OUTREACH_CSV):
+    pd.DataFrame(columns=["Date", "Calls", "Emails", "LinkedIn", "Meetings", "Follow_Ups", "Notes"]).to_csv(OUTREACH_CSV, index=False)
+
+# Today's outreach form
+with st.form("daily_outreach"):
+    st.markdown("**Today's Outreach Numbers:**")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        calls = st.number_input("Calls Made", 0, 100, 0)
+    with col2:
+        emails = st.number_input("Emails Sent", 0, 100, 0)
+    with col3:
+        linkedin = st.number_input("LinkedIn DMs", 0, 100, 0)
+    with col4:
+        meetings = st.number_input("Meetings Booked", 0, 20, 0)
+    
+    follow_ups = st.number_input("Follow-ups Scheduled", 0, 50, 0)
+    outreach_notes = st.text_area("Outreach Insights")
+    
+    if st.form_submit_button("💌 LOG TODAY'S OUTREACH"):
+        outreach_df = pd.read_csv(OUTREACH_CSV)
+        new_outreach = {
+            "Date": date.today().isoformat(),
+            "Calls": calls,
+            "Emails": emails, 
+            "LinkedIn": linkedin,
+            "Meetings": meetings,
+            "Follow_Ups": follow_ups,
+            "Notes": outreach_notes
+        }
+        pd.concat([outreach_df, pd.DataFrame([new_outreach])], ignore_index=True).to_csv(OUTREACH_CSV, index=False)
+        st.success("Outreach logged!")
+
+# Outreach metrics and trends
+try:
+    outreach_df = pd.read_csv(OUTREACH_CSV)
+    if len(outreach_df) > 0:
+        st.markdown("#### 📊 Outreach Performance")
+        
+        # Weekly metrics
+        recent_outreach = outreach_df.tail(7)  # Last 7 days
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            avg_daily_contacts = recent_outreach[['Calls', 'Emails', 'LinkedIn']].sum(axis=1).mean()
+            st.metric("Avg Daily Contacts", f"{avg_daily_contacts:.0f}")
+        with col2:
+            meeting_rate = (recent_outreach['Meetings'].sum() / recent_outreach[['Calls', 'Emails', 'LinkedIn']].sum().sum() * 100) if recent_outreach[['Calls', 'Emails', 'LinkedIn']].sum().sum() > 0 else 0
+            st.metric("Meeting Rate", f"{meeting_rate:.1f}%")
+        with col3:
+            total_follow_ups = recent_outreach['Follow_Ups'].sum()
+            st.metric("Active Follow-ups", total_follow_ups)
+        with col4:
+            streak = len(outreach_df[outreach_df[['Calls', 'Emails', 'LinkedIn']].sum(axis=1) > 0])
+            st.metric("Outreach Streak", f"{streak} days")
+        
+        # Outreach trend chart
+        if len(outreach_df) > 1:
+            outreach_df['Date'] = pd.to_datetime(outreach_df['Date'])
+            outreach_df['Total_Contacts'] = outreach_df['Calls'] + outreach_df['Emails'] + outreach_df['LinkedIn']
+            
+            fig = px.line(outreach_df, x='Date', y='Total_Contacts', 
+                         title="Daily Outreach Trend", markers=True)
+            st.plotly_chart(fig, use_container_width=True)
+            
+except Exception as e:
+    st.info("Log outreach data to see performance metrics")
 
 # Business update form
 with st.expander("📈 Update Business Metrics"):
     with st.form("business_update"):
-        new_rev = st.number_input("Monthly Revenue", value=biz_df['Revenue'].iloc[-1])
-        new_clients = st.number_input("Active Clients", value=biz_df['Clients'].iloc[-1])
-        new_pipeline = st.number_input("Pipeline Value", value=biz_df['Pipeline'].iloc[-1])
+        new_rev = st.number_input("Monthly Revenue", value=revenue)
+        new_clients = st.number_input("Active Clients", value=clients)
+        new_pipeline = st.number_input("Pipeline Value", value=pipeline)
+        new_close_rate = st.number_input("Close Rate %", value=close_rate*100, min_value=0.0, max_value=100.0, step=1.0) / 100
         if st.form_submit_button("💾 Save Business Update"):
-            new_row = {"Date": date.today().isoformat(), "Revenue": new_rev, "Clients": new_clients, "Pipeline": new_pipeline}
+            new_row = {
+                "Date": date.today().isoformat(), 
+                "Revenue": new_rev, 
+                "Active_Clients": new_clients, 
+                "Pipeline_Value": new_pipeline,
+                "Close_Rate": new_close_rate
+            }
             pd.concat([biz_df, pd.DataFrame([new_row])], ignore_index=True).to_csv(BUSINESS_CSV, index=False)
             st.success("Business metrics updated!")
 
