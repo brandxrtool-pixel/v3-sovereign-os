@@ -1,0 +1,41 @@
+{
+  "1.1": {
+    "name": "Wounded Perfectionist",
+    "description": "Self-sabotage through impossible standards",
+    "protocols": [
+      "Mirror Self-Compassion",
+      "Imperfect Acts"
+    ],
+    "current_strength": 7,
+    "integration_progress": 0
+  },
+  "1.2": {
+    "name": "Hidden Victim/Martyr",
+    "description": "Passive aggression and boundary issues",
+    "protocols": [
+      "Boundary Scripts",
+      "Micro-Confrontations"
+    ],
+    "current_strength": 5,
+    "integration_progress": 0
+  },
+  "7.1": {
+    "name": "Imposter/Scarcity Self",
+    "description": "Financial self-sabotage and undervaluing",
+    "protocols": [
+      "Pricing Experiments",
+      "Money Affirmations"
+    ],
+    "current_strength": 6,
+    "integration_progress": 0
+  },
+  "7.2": {
+    "name": "Control Tycoon",
+    "description": "Inability to delegate and trust",
+    "protocols": [
+      "Delegation Experiments"
+    ],
+    "current_strength": 8,
+    "integration_progress": 0
+  }
+}
