@@ -1,0 +1,194 @@
+/* === VIVID & EYE-CATCHING CSS (Uniform Dark Blue Theme) === */
+
+/* Override Streamlit's default background - SOLID VERY DARK BLUE */
+.stApp {
+    background: #0e1117 !important; /* Set to requested near-black dark color */
+}
+
+/* Main content area background */
+.main {
+    background: transparent !important;
+}
+
+/* Override Streamlit's main container */
+.block-container {
+    background: transparent !important;
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+}
+
+/* Individual content blocks (cards/graphs) - White remains here for contrast */
+.main > div {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 0.5rem;
+    border: 1px solid #E5E7EB;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    color: #1F2937;
+    transition: all 0.3s ease-in-out;
+}
+.main > div:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+}
+
+
+/* --- Sidebar --- */
+
+/* Sidebar wrapper container - Added for aggressive override */
+[data-testid="stSidebar"] {
+    background: #0e1117 !important;
+}
+
+/* Sidebar content background - Changed to requested near-black dark color to match app background */
+.sidebar .sidebar-content {
+    background: #0e1117 !important;
+}
+
+/* Sidebar header text - Changed back to WHITE */
+.sidebar .sidebar-content h1, 
+.sidebar .sidebar-content h2,
+.sidebar .sidebar-content h3,
+.sidebar .sidebar-content div {
+    color: #ffffff !important; /* White text for dark background */
+}
+
+/* Sidebar radio buttons text color - Changed back to WHITE */
+.st-c0, .st-c1, .st-c2, .st-c3, .st-c4, .st-c5, .st-c6, .st-c7, .st-c8, .st-c9 {
+    color: #ffffff !important; /* White text for dark background */
+}
+
+/* Ensure all radio button labels are white */
+label {
+    color: #ffffff !important; /* White text for dark background */
+}
+
+/* VIVID: Highlight selected navigation item (green accent remains) */
+[data-testid="stRadio"] [aria-checked="true"] label {
+    color: #10B981 !important;
+    font-weight: 600 !important;
+}
+
+
+/* --- Card Styles --- */
+/* VIVID: Add "glow" to colored cards */
+
+.pillar-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    border-left: 5px solid #10B981;
+    box-shadow: 0 4px 20px -5px rgba(16, 185, 129, 0.4);
+    color: #1F2937;
+}
+
+.shadow-work-card {
+    background: #FFFBEB;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    border-left: 5px solid #F59E0B;
+    box-shadow: 0 4px 20px -5px rgba(245, 158, 11, 0.4);
+    color: #1F2937;
+}
+
+.masterclass-card {
+    background: #EFF6FF;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    border-left: 5px solid #3B82F6;
+    box-shadow: 0 4px 20px -5px rgba(59, 130, 246, 0.3);
+    color: #1F2937;
+}
+
+.kpi-metric {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 0.5rem;
+    text-align: center;
+    color: #1F2937;
+}
+
+/* --- Chat Messages --- */
+
+.chat-message-user {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    color: #1F2937;
+}
+
+.chat-message-ai {
+    background: #F0FDF4;
+    border: 1px solid #BBF7D0;
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    color: #1F2937;
+}
+
+.protocol-item {
+    background: #F0FDF4;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    border-left: 4px solid #10B981;
+    color: #1F2937;
+}
+
+/* --- Headings & Buttons --- */
+
+/* Headings in main content */
+h1, h2, h3, h4 {
+    color: #111827;
+    font-weight: 600;
+}
+
+/* VIVID: Gradient buttons with "pop" hover */
+.stButton button {
+    background: linear-gradient(45deg, #10B981 0%, #059669 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    box-shadow: 0 2px 10px rgba(16, 185, 129, 0.3);
+    transition: all 0.3s ease;
+}
+
+.stButton button:hover {
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.5);
+}
+
+/* --- Streamlit Specific Overrides --- */
+
+[data-testid="metric-container"] {
+    color: #1F2937 !important;
+}
+
+[data-testid="metric-value"] {
+    color: #1F2937 !important;
+}
+
+[data-testid="metric-label"] {
+    color: #1F2937 !important;
+}
+
+/* Make sure all text in main content is dark (for white cards) */
+.main > div, .main > div * {
+    color: #1F2937 !important;
+}
+
+/* Status text in sidebar - ensuring alerts are readable on dark background */
+.stAlert, .stWarning, .stSuccess, .stError, .stInfo {
+    color: #ffffff !important;
+}
