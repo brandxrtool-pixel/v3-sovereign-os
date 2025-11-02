@@ -1,3 +1,23 @@
-.venv/
+# --- Environment and Cache ---
+# Virtual Environment Folder
+v3env/
+# Python Cache
 __pycache__/
 *.pyc
+.env
+.ipynb_checkpoints/
+
+# --- Streamlit/App Local Data Files ---
+# Ignore Streamlit's local cache
+.streamlit/
+
+# Generated Local Data Files (App Persistence/History)
+# These files are used for local data storage and should NOT be committed.
+# They are generally too large or irrelevant for version control.
+*.json
+*.csv
+data/
+
+# Specific files that look like old/temp code
+v3_command_center_v3.py
+daily_operations_backup.py

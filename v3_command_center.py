@@ -1,4 +1,11 @@
 # v3_command_center.py
+from dotenv import load_dotenv
+import os
+
+# Load .env file
+load_dotenv()
+
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -10,6 +17,24 @@ import time
 import os
 
 st.set_page_config(page_title="V3 Command Center", layout="wide")
+
+# --- LOAD ENVIRONMENT VARIABLES ---
+load_dotenv()
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+st.set_page_config(page_title="V3 Command Center", layout="wide")
+
+# --- CHECK API KEYS ---
+if ELEVEN_API_KEY:
+    st.sidebar.success("🔑 ElevenLabs key loaded")
+else:
+    st.sidebar.error("❌ ElevenLabs key not found")
+
+if GEMINI_API_KEY:
+    st.sidebar.success("🧠 Gemini key loaded")
+else:
+    st.sidebar.error("⚠️ Gemini key not found")
 
 # Data files - PRESERVING ALL YOUR EXISTING DATA
 DATA_DIR = "data"
