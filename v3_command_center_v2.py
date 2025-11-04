@@ -1,5 +1,6 @@
 # V3 Sovereign OS - Command Center
 # Streamlit application for personal development, structured by Pillars and Shadows.
+# MODIFIED FOR LOCAL EXECUTION (Reads API Key from st.secrets)
 
 import streamlit as st
 import json
@@ -8,65 +9,96 @@ import time
 import base64
 from datetime import datetime
 import asyncio
+import requests # Added requests for API calls
 from typing import List, Dict, Any, Optional
 
 # --- Configuration ---
 # Set the model name for text generation tasks
 GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025"
 
-# --- Global Variables for Firestore ---
-# Access secrets via Streamlit's native st.secrets for reliable deployment.
-try:
-    # Use st.secrets for reliable deployment and local access
-    # Using simple, uppercase names to avoid potential Streamlit Cloud parsing issues.
-    APP_ID = st.secrets.get('APP_ID', 'default-sovereign-os-id')
-    
-    # Load Firebase config JSON string from secrets
-    config_str = st.secrets.get('FIREBASE_CONFIG', '{}')
-    if config_str == '{}':
-        # If the key is missing, log the error (this is the error we are trying to fix)
-        st.error("FATAL: 'FIREBASE_CONFIG' not found in Streamlit secrets. Persistence will fail.")
-        firebaseConfig = {}
-    else:
-        # Load the configuration string as a JSON object
-        firebaseConfig = json.loads(config_str)
+# --- Global Variables for Firestore/API Keys ---
+# Using standard global variables provided by the Canvas environment.
+# Note: Canvas provides __app_id, __firebase_config, and __initial_auth_token
+# We check for these in the environment or use placeholders.
 
-    initialAuthToken = st.secrets.get('AUTH_TOKEN')
-except AttributeError:
-    # Fallback if st.secrets is not initialized or app is run outside Streamlit context
-    # This path is usually not hit in a Streamlit Cloud deployment but is kept for robustness.
-    APP_ID = os.environ.get('APP_ID', 'default-sovereign-os-id')
-    firebaseConfig = json.loads(os.environ.get('FIREBASE_CONFIG', '{}'))
-    initialAuthToken = os.environ.get('AUTH_TOKEN')
+# Check for existence of Canvas global variables if running outside Streamlit environment
+try:
+    # Use environment variables for Canvas globals
+    APP_ID = os.environ.get('__app_id') or 'default-sovereign-os-id'
+    config_str = os.environ.get('__firebase_config', '{}')
+    initialAuthToken = os.environ.get('__initial_auth_token')
+except Exception:
+    # Fallback placeholders
+    APP_ID = 'default-sovereign-os-id'
+    config_str = '{}'
+    initialAuthToken = None
+
+try:
+    firebaseConfig = json.loads(config_str)
 except json.JSONDecodeError:
-    st.error("FATAL: 'FIREBASE_CONFIG' content is not valid JSON. Check quotes in secrets.toml.")
     firebaseConfig = {}
 
-# --- Helper Functions for File/Data Management ---
 
-def get_base_path(filename: str) -> str:
-    """Gets the path for the data file."""
-    # This design uses local files for demonstration.
-    # For a persistent, collaborative app, this would be Firestore access.
-    return os.path.join(os.path.dirname(__file__), filename)
+def get_base_path(relative_path):
+    """Return absolute path for a file (works in local + Streamlit Cloud)"""
+    try:
+        # When running on Streamlit Cloud or local Streamlit run
+        base_path = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
+    except NameError:
+        # When running interactively or in notebooks
+        base_path = os.getcwd()
+    return os.path.join(base_path, relative_path)
+
+# Ensure a minimal style.css exists for the load_css function not to fail
+# We create a dummy file on the fly if needed, or rely on the fallback CSS.
+try:
+    with open(get_base_path('style.css'), 'w') as f:
+        f.write(".st-emotion-cache-12fmj8x { padding-top: 2rem; }")
+except Exception:
+    pass
+
+# --- Persistence Functions (Simulated File I/O) ---
 
 def load_data(filename: str, default_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Loads data from a JSON file with error handling."""
+    """
+    Loads data from a JSON file with error handling.
+    This function has been reinforced to prevent the list index TypeError
+    by checking the file's root structure before accessing keys.
+    """
     filepath = get_base_path(filename)
+    data = default_data.copy() # Start with a copy of defaults
+    
     try:
         with open(filepath, 'r') as f:
-            data = json.load(f)
-            # Ensure the structure exists (e.g., 'goals' key is present)
+            file_data = json.load(f)
+            
+            # CRITICAL FIX: Ensure file_data is a dictionary before trying to merge/access keys
+            if isinstance(file_data, dict):
+                data.update(file_data)
+            else:
+                # If it's a list or primitive, skip the update and use defaults/existing keys
+                st.warning(f"File {filename} content is a list/primitive, not a dict. Using default structure.")
+            
+            # Ensure the required keys from default_data are present in the final data
             for key, default_value in default_data.items():
                 if key not in data:
                     data[key] = default_value
             return data
+            
     except FileNotFoundError:
         st.warning(f"Data file not found: {filename}. Initializing with default data.")
+        # Save default data immediately to create the file structure
+        try:
+             with open(filepath, 'w') as f:
+                json.dump(default_data, f, indent=4)
+        except Exception:
+            pass # Ignore write errors if the environment is read-only
         return default_data
+        
     except json.JSONDecodeError:
         st.error(f"Error decoding JSON in {filename}. Initializing with default data to prevent crash.")
         return default_data
+
 
 def save_all_data():
     """Saves all current session state data back to their respective files."""
@@ -85,13 +117,13 @@ def save_all_data():
         with open(get_base_path('tasks.json'), 'w') as f:
             json.dump({'tasks': st.session_state.tasks_data['tasks']}, f, indent=4)
 
-        # Save Chat Histories
+        # Save Chat Histories (Adhering to the {'history': list} structure for load_data compatibility)
         with open(get_base_path('v3_advisor_history.json'), 'w') as f:
-            json.dump(st.session_state.v3_advisor_history, f, indent=4)
+            json.dump({'history': st.session_state.v3_advisor_history}, f, indent=4)  
         with open(get_base_path('super_ai_history.json'), 'w') as f:
-            json.dump(st.session_state.super_ai_history, f, indent=4)
+            json.dump({'history': st.session_state.super_ai_history}, f, indent=4)
         with open(get_base_path('bol_academy_history.json'), 'w') as f:
-            json.dump(st.session_state.bol_academy_history, f, indent=4)
+            json.dump({'history': st.session_state.bol_academy_history}, f, indent=4)
 
         st.toast("✅ All data saved successfully!", icon="💾")
         st.session_state.unsaved_changes = False
@@ -103,7 +135,6 @@ def create_backup():
     """Creates a zip archive of all current JSON data files."""
     st.info("Backup functionality would typically create a ZIP file of all JSONs here.")
     st.toast("Backup data created!", icon="📦")
-    # In a real environment, you would use 'zipfile' module here.
     st.session_state.unsaved_changes = False
 
 # --- Core Data Initialization ---
@@ -129,11 +160,12 @@ def initialize_session_state():
         st.session_state.page = 'Dashboard'
         st.session_state.unsaved_changes = False
         st.session_state.initialized = True
+        st.session_state.user_input = ""
 
         # 3. Chat Histories
         # Load or initialize V3 Advisor history
         v3_advisor_default = [{
-            "role": "assistant",
+            "role": "model",
             "text": "Welcome to the V3 Command Center. I am your V3 Advisor. How can I assist you in optimizing your day or refining your Pillars and Shadows today?",
             "is_user": False
         }]
@@ -141,7 +173,7 @@ def initialize_session_state():
 
         # Load or initialize Super AI history
         super_ai_default = [{
-            "role": "assistant",
+            "role": "model",
             "text": "Greetings. I am the Super AI. Submit any complex, unstructured data or queries, and I will analyze them through the lens of your Sovereign OS structure.",
             "is_user": False
         }]
@@ -149,7 +181,7 @@ def initialize_session_state():
 
         # Load or initialize BOL Academy history
         bol_academy_default = [{
-            "role": "assistant",
+            "role": "model",
             "text": "Welcome to the BOL Academy. I am your dedicated tutor for the 21 Brotherhood of Light Courses. When you are ready, please tell me to begin **Course 1: Laws of Occultism: Inner Plane Theory and the Fundamentals of Psychic Phenomena**.",
             "is_user": False
         }]
@@ -159,7 +191,7 @@ def initialize_session_state():
         st.session_state.db = None
         st.session_state.auth = None
         # Placeholder for unauthenticated environment or based on auth token
-        st.session_state.user_id = "default_user" 
+        st.session_state.user_id = APP_ID # Use APP_ID as default user ID
 
 # --- Styling and UI Functions ---
 
@@ -169,7 +201,7 @@ def load_css(filepath: str):
         with open(filepath) as f:
             st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
     except FileNotFoundError:
-        # Create a basic CSS file if it's missing for initial deployment
+        # Fallback inline CSS for aesthetics
         st.markdown("""
             <style>
                 .main { background-color: #0d1117; color: #c9d1d9; font-family: 'Inter', sans-serif; }
@@ -197,6 +229,9 @@ def load_css(filepath: str):
                 .task-completed-label { color: #3fb950; text-decoration: line-through; margin-top: 5px; font-size: 0.9rem; }
                 .user-id-display { font-size: 0.75rem; color: #8b949e; margin-top: 15px; }
                 .user-id-display span { font-family: monospace; color: #58a6ff; }
+                .chat-container { height: 70vh; overflow-y: auto; padding: 10px; border: 1px solid #21262d; border-radius: 8px; margin-bottom: 10px; }
+                .user-message { background-color: #0c1a26; padding: 10px; border-radius: 15px 15px 5px 15px; margin-bottom: 10px; max-width: 80%; margin-left: auto; color: #c9d1d9; }
+                .assistant-message { background-color: #161b22; padding: 10px; border-radius: 15px 15px 15px 5px; margin-bottom: 10px; max-width: 80%; color: #c9d1d9; }
             </style>
         """, unsafe_allow_html=True)
 
@@ -248,10 +283,12 @@ def render_dashboard():
     # --- 1. Top Metrics (Overall Health) ---
 
     # Calculate Goal Progress (Handle empty list safely)
-    if goals and goals[0] and goals[0].get('progress') is not None:
-        goal_progress = sum([g.get('progress', 0) for g in goals]) / len(goals)
-    else:
-        goal_progress = 0
+    goal_progress = 0
+    if goals:
+        # Filter for goals that have a progress key and are numbers
+        valid_progresses = [g.get('progress', 0) for g in goals if isinstance(g.get('progress'), (int, float))]
+        if valid_progresses:
+            goal_progress = sum(valid_progresses) / len(valid_progresses)
 
     # Calculate Sovereign Score (Average of all Pillar scores)
     sovereign_score = sum([p['score'] for p in pillars]) / len(pillars) if pillars else 0
@@ -339,12 +376,13 @@ def render_pillars_shadows():
         with cols[i]:
             st.subheader(p['name'])
             new_score = st.slider('Current Score', 0, 100, p['score'], key=f"pillar_score_{p['name']}")
-            st.session_state.pillars_data['pillars'][i]['score'] = new_score
-            
+            if new_score != p['score']:
+                st.session_state.pillars_data['pillars'][i]['score'] = new_score
+                st.session_state.unsaved_changes = True
+
             new_focus = st.text_area('Core Focus', p['focus'], key=f"pillar_focus_{p['name']}")
-            st.session_state.pillars_data['pillars'][i]['focus'] = new_focus
-            
-            if new_score != p['score'] or new_focus != p['focus']:
+            if new_focus != p['focus']:
+                st.session_state.pillars_data['pillars'][i]['focus'] = new_focus
                 st.session_state.unsaved_changes = True
 
     st.markdown("---")
@@ -358,12 +396,13 @@ def render_pillars_shadows():
         with shadow_cols[i]:
             st.subheader(s['name'])
             new_score = st.slider('Taming Progress (%)', 0, 100, s['score'], key=f"shadow_score_{s['name']}")
-            st.session_state.shadows_data['shadows'][i]['score'] = new_score
-            
+            if new_score != s['score']:
+                st.session_state.shadows_data['shadows'][i]['score'] = new_score
+                st.session_state.unsaved_changes = True
+
             new_focus = st.text_area('Integration Focus', s['focus'], key=f"shadow_focus_{s['name']}")
-            st.session_state.shadows_data['shadows'][i]['focus'] = new_focus
-            
-            if new_score != s['score'] or new_focus != s['focus']:
+            if new_focus != s['focus']:
+                st.session_state.shadows_data['shadows'][i]['focus'] = new_focus
                 st.session_state.unsaved_changes = True
 
 def render_goals():
@@ -391,7 +430,9 @@ def render_goals():
         with st.form("new_goal_form", clear_on_submit=True):
             goal_name = st.text_input("Goal Name (e.g., Launch SaaS product in 6 months)")
             goal_pillar = st.selectbox("Linked Pillar", pillars)
-            goal_deadline = st.date_input("Target Deadline", min_value=datetime.now().date(), value=datetime.now().date())
+            # Ensure value defaults to today if not provided
+            default_date = datetime.now().date()
+            goal_deadline = st.date_input("Target Deadline", min_value=default_date, value=default_date)
             submitted = st.form_submit_button("Create Goal")
             
             if submitted:
@@ -430,6 +471,7 @@ def render_goals():
         with col3:
             # Delete button
             if st.button("🗑️", key=f"delete_goal_{g['id']}"):
+                # Use st.session_state.goals_data['goals'].remove(g) if possible, or pop by index
                 st.session_state.goals_data['goals'].pop(i)
                 st.session_state.unsaved_changes = True
                 st.rerun()
@@ -508,14 +550,20 @@ def render_tasks():
         
         # Completion Checkbox
         with col1:
-            is_completed = col1.checkbox("", key=f"checkbox_{key_prefix}", value=False)
+            # We use a state check to see if the task has already been completed in the main list
+            initial_value = task.get('completed', False)
+            is_completed_check = col1.checkbox("", key=f"checkbox_{key_prefix}", value=initial_value)
             
         # Task Details
         with col2:
-            task_style = 'task-completed' if task.get('completed') else 'task-pending'
+            task_style = 'task-completed-label' if task.get('completed') else 'task-pending'
+            task_name_display = task['name']
+            if task.get('completed'):
+                 task_name_display = f"✅ {task_name_display}"
+
             st.markdown(f"""
             <div class='{task_style}'>
-                **{task['name']}**
+                **{task_name_display}**
                 <span class='pillar-tag-small'>{task['pillar']}</span> 
                 <span class='priority-tag {task['priority']}'>{task['priority']}</span>
             </div>
@@ -532,8 +580,8 @@ def render_tasks():
                     st.session_state.unsaved_changes = True
                     st.rerun()
 
-        # Handle Completion Logic
-        if is_completed:
+        # Handle Completion Logic (Only if the checkbox state changes from False to True)
+        if is_completed_check and not initial_value:
             # Find and update the original task in the main list
             for t in st.session_state.tasks_data['tasks']:
                 if t['id'] == task['id']:
@@ -548,19 +596,36 @@ def render_tasks():
         st.caption("No tasks completed yet.")
     else:
         for task in completed_tasks:
+            # Display using the class that applies the strikethrough
             st.markdown(f"<div class='task-completed-label'>✅ {task['name']} <span class='pillar-tag-small'>{task['pillar']}</span></div>", unsafe_allow_html=True)
 
 
 # --- AI Coach Functions ---
 
-async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False) -> str:
-    """Handles the async API call to Gemini with backoff."""
+async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False) -> Dict[str, Any]:
+    """
+    Handles the async API call to Gemini with backoff.
+    CRITICAL FIX: This function is now guaranteed to return a dictionary 
+    with 'text' and 'sources' keys on both success and failure, preventing KeyError.
     
-    # Retrieve API key from st.secrets using the new, simplified name
-    apiKey = st.secrets.get('GEMINI_API_KEY', '')
-    if not apiKey:
-        return "FATAL ERROR: Gemini API key not found in Streamlit secrets."
-        
+    --- MODIFIED FOR LOCAL EXECUTION ---
+    This function now reads the GEMINI_API_KEY from st.secrets.
+    """
+    
+    # --- MODIFICATION FOR LOCAL RUN ---
+    # Retrieve API key from Streamlit secrets
+    try:
+        # st.secrets is the standard way to access secrets in Streamlit
+        apiKey = st.secrets["GEMINI_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        # This error will be shown if .streamlit/secrets.toml is missing or the key isn't set
+        return {"text": "Error: `GEMINI_API_KEY` not found. Please create a file named `.streamlit/secrets.toml` in your app's root directory and add `GEMINI_API_KEY = \"YOUR_API_KEY_HERE\"`.", "sources": []}
+    except Exception as e:
+         # Catch other potential startup errors with secrets
+         return {"text": f"Error loading Streamlit secrets: {e}", "sources": []}
+    
+    # --- END MODIFICATION ---
+
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={apiKey}"
 
     # Format history for API payload
@@ -568,30 +633,14 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
     for message in history:
         # The role must be 'user' or 'model' for the API
         role = "user" if message.get('is_user') else "model"
-        # Skip the first 'model' message in a fresh history for the API call 
-        # as it is usually covered by the system prompt, but ensure subsequent 'model' responses are preserved.
-        if role == "model" and not message.get('is_user') and len(contents) == 0 and len(history) > 1:
-             continue 
+        
+        # Ensure 'text' part exists, handle potential missing key from flawed history data
+        message_text = message.get('text', 'Placeholder for missing text.')
         
         contents.append({
             "role": role,
-            "parts": [{"text": message['text']}]
+            "parts": [{"text": message_text}]
         })
-    
-    # Get the latest user message content (or all content if history is empty)
-    if contents:
-        # Check if the last role is 'user', if so, use all contents
-        if contents[-1]['role'] == 'user':
-            pass
-        else:
-             # If the last role is not user (e.g. system message only), ensure we have contents
-             if not contents:
-                 contents = [{"role": "user", "parts": [{"text": "Start the conversation."}]}]
-    else:
-         # Handle case where history is empty and a default prompt might be needed (handled by the system prompt for now)
-         # In a conversational flow, the contents array should grow
-         pass
-
 
     # Prepare the payload with the full history
     payload = {
@@ -606,12 +655,13 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
     # Implement exponential backoff for robustness
     for attempt in range(4): # up to 4 attempts
         try:
-            # We use asyncio.to_thread to run the synchronous requests.post call
+            # Use requests.post synchronously within a thread
             response = await asyncio.to_thread(
                 lambda: requests.post(
                     apiUrl, 
                     headers={'Content-Type': 'application/json'}, 
-                    data=json.dumps(payload)
+                    data=json.dumps(payload),
+                    timeout=30 # Add timeout for robustness
                 )
             )
             response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
@@ -619,11 +669,12 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
             result = response.json()
             candidate = result.get('candidates', [{}])[0]
             
+            # Successful response processing
             if candidate and candidate.get('content', {}).get('parts', [{}])[0].get('text'):
                 text = candidate['content']['parts'][0]['text']
+                sources = []
                 
                 # Append sources if search grounding was used
-                sources_text = ""
                 grounding_metadata = candidate.get('groundingMetadata')
                 if use_search and grounding_metadata and grounding_metadata.get('groundingAttributions'):
                     sources = []
@@ -634,212 +685,180 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
                             sources.append(f"[{title}]({uri})")
                     
                     if sources:
-                        sources_text = "\n\n---\n**Sources:** " + " | ".join(sources)
+                        text += "\n\n---\n**Sources:** " + " | ".join(sources)
                 
-                return text + sources_text
+                return {"text": text, "sources": sources}
             else:
-                return "Error: Could not retrieve a valid response from the AI model."
+                # API responded successfully, but returned no text candidate
+                return {"text": "Error: Could not retrieve a valid text response from the AI model.", "sources": []}
 
         except requests.exceptions.RequestException as e:
             if attempt < 3:
                 delay = 2 ** attempt
-                # print(f"API Error: {e}. Retrying in {delay} seconds...") # Do not log retries
+                # Log the retry attempt silently (no print/st.error)
                 await asyncio.sleep(delay)
             else:
-                return f"Error: Failed to connect to AI service after multiple retries. ({e})"
+                # Final attempt failed
+                # MODIFIED Error Message
+                error_text = f"Error: Failed to connect to AI service after multiple retries (Status: {e}). **This often indicates your GEMINI_API_KEY in secrets.toml is invalid, expired, or has insufficient permissions.**"
+                return {"text": error_text, "sources": []}
         except Exception as e:
-            return f"An unexpected error occurred: {e}"
+            # Unexpected JSON or other error
+            error_text = f"An unexpected error occurred during AI call processing: {e}"
+            return {"text": error_text, "sources": []}
 
-    return "Error: Maximum retry attempts reached."
+    # Should not be reached, but as a final safety net
+    return {"text": "Error: Maximum retry attempts reached.", "sources": []}
+
 
 # Function to run the async AI call in a synchronous Streamlit context
-def run_async_ai_call(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False):
-    """Wrapper to run the async API call and handle result update."""
+def run_async_ai_call(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False) -> Dict[str, Any]:
+    """Wrapper to run the async API call and return a structured dictionary."""
     
-    # Placeholder for requests library check (needed for the API call)
-    try:
-        global requests
-        import requests
-    except ImportError:
-        # This error is also checked in main() and sidebar
-        return "Error: 'requests' library not installed. AI functionality is disabled."
-
     # Run the async function using asyncio.run
     try:
-        # Create a new event loop if none is running (necessary for Streamlit environment)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        response = loop.run_until_complete(call_gemini_api(history, system_prompt, use_search))
-        return response
+        # Get or create the event loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        response_dict = loop.run_until_complete(call_gemini_api(history, system_prompt, use_search))
+        return response_dict
     except Exception as e:
-        return f"Error executing async call: {e}"
+        # Fallback error return
+        return {"text": f"Error executing async call wrapper: {e}", "sources": []}
 
 # Standard chat interface renderer
 def render_chat_interface(title: str, history_key: str, system_prompt: str, use_search: bool = False):
-    """Renders the standard chat UI."""
+    """Renders the AI chat interface for a specific advisor mode."""
     st.markdown(f"## {title}")
-    st.markdown("<div class='subheader'>Your dedicated AI interface.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='subheader'>Engage the Sovereign AI interface.</div>", unsafe_allow_html=True)
 
-    # Display chat messages from history
-    for message in st.session_state[history_key]:
-        # Only render messages that have text content
-        if message.get('text'):
-            with st.chat_message("user" if message.get('is_user') else "assistant"):
-                st.markdown(message['text'])
+    # Use the specific history key from session state
+    history = st.session_state[history_key]
+
+    # --- Display Chat History ---
+    with st.container(height=400, border=True):
+        for message in history:
+            role = "user" if message.get('is_user') else "assistant"
             
-    # Input field for user
-    if user_prompt := st.chat_input("Ask your coach..."):
-        # Add user message to history
-        st.session_state[history_key].append({"role": "user", "text": user_prompt, "is_user": True})
-        
-        # Display the user message immediately
-        with st.chat_message("user"):
-            st.markdown(user_prompt)
+            # The role variable is used for Streamlit chat elements
+            with st.chat_message(role):
+                # Now we safely check for the 'text' key before rendering
+                text_content = message.get('text', 'Error: Message content missing.')
+                st.markdown(text_content)
 
-        # Get AI response
-        with st.chat_message("assistant"):
-            with st.spinner("Processing..."):
-                response = run_async_ai_call(st.session_state[history_key], system_prompt, use_search)
-                st.markdown(response)
+    # --- Chat Input and Logic ---
+    user_query = st.chat_input("Submit your query...")
+
+    if user_query:
+        # 1. Add user message
+        user_message = {
+            "role": "user",
+            "text": user_query,
+            "is_user": True
+        }
+        st.session_state[history_key].append(user_message)
         
-        # Add assistant response to history
-        st.session_state[history_key].append({"role": "assistant", "text": response, "is_user": False})
-        st.session_state.unsaved_changes = True
-        st.rerun() # Rerun to refresh the chat window properly
+        # 2. Get AI Response
+        with st.spinner(f"{title} thinking..."):
+            # This safely returns a dictionary {text: ..., sources: ...}
+            ai_response_dict = run_async_ai_call(st.session_state[history_key], system_prompt, use_search)
+
+        # 3. Add assistant message (using the guaranteed dictionary structure)
+        assistant_message = {
+            "role": "model",
+            "text": ai_response_dict.get('text', 'AI response failed.'),
+            "is_user": False
+        }
+        st.session_state[history_key].append(assistant_message)
+        
+        # Rerun to display the new messages
+        st.rerun()
 
 def render_v3_advisor():
-    """Renders the V3 Advisor (General Coaching) chat page."""
-    system_prompt = (
-        "You are the V3 Advisor, a highly structured, analytical life coach and system optimizer. "
-        "Your role is to help the user refine their Pillars, mitigate their Shadows, and achieve their Goals. "
-        "Always respond concisely, focusing on practical actions, clear frameworks, and strategic thinking. "
-        "Do not use emojis unless specifically requested."
-    )
+    """Renders the V3 Advisor chat interface."""
     render_chat_interface(
-        title="💬 V3 Advisor (General Coaching)", 
+        title="V3 Advisor", 
         history_key='v3_advisor_history', 
-        system_prompt=system_prompt, 
-        use_search=False
+        system_prompt="You are the V3 Advisor, a helpful and analytical coach providing guidance on personal development, productivity, and life planning, always referencing the user's Pillars and Shadows.", 
+        use_search=True
     )
 
 def render_super_ai():
-    """Renders the Super AI (Data Analysis) chat page."""
-    system_prompt = (
-        "You are the Super AI. Your function is to analyze complex data, unstructured text, or vast information "
-        "and distill it through a highly rational, objective, and strategic filter. "
-        "Assume the user is a high-level sovereign operator. Use cold, logical, and highly concise language. "
-        "Your goal is to extract key insights, highlight hidden risks, and suggest optimal strategies. "
-        "You have access to Google Search for grounding your analysis."
-    )
+    """Renders the Super AI interface."""
     render_chat_interface(
-        title="🧬 Super AI (Strategic Analysis)", 
+        title="Super AI", 
         history_key='super_ai_history', 
-        system_prompt=system_prompt, 
+        system_prompt="You are the Super AI. Your role is to analyze complex, unstructured data or queries through the lens of the user's Pillars and Shadows structure, providing deep, actionable insights and strategic analysis.", 
         use_search=True
     )
 
 def render_bol_academy():
-    """Renders the Brotherhood of Light Academy page."""
-    system_prompt = (
-        "You are the dedicated tutor for the 21 Brotherhood of Light (Church of Light) Courses. "
-        "Your mission is to deliver the course material chapter-by-chapter, based on publicly available sources. "
-        "When the user asks to start a course or chapter, use Google Search to find the specific content. "
-        "Structure each lesson clearly, and conclude with a small reflective exercise or a few comprehension questions. "
-        "Only move to the next chapter or course when the user indicates they are ready. "
-        "The first course is: 'Laws of Occultism: Inner Plane Theory and the Fundamentals of Psychic Phenomena'."
-    )
+    """Renders the BOL Academy interface."""
     render_chat_interface(
-        title="🔮 BOL Academy (Course Tutor)", 
+        title="BOL Academy", 
         history_key='bol_academy_history', 
-        system_prompt=system_prompt, 
-        use_search=True
+        system_prompt="You are the BOL Academy dedicated tutor for the 21 Brotherhood of Light Courses, guiding the user through lessons on occultism, inner plane theory, and psychic phenomena.", 
+        use_search=False
     )
-
-# --- Settings Page ---
 
 def render_settings():
-    """Renders the settings and maintenance page."""
-    st.markdown("## System Settings")
-    st.markdown("<div class='subheader'>Maintenance and Configuration</div>", unsafe_allow_html=True)
-    
+    """Renders the Settings page."""
+    st.markdown("## ⚙️ System Settings & Maintenance")
+    st.markdown("<div class='subheader'>Manage data integrity and system configuration.</div>", unsafe_allow_html=True)
+
     st.markdown("### Data Management")
-    st.button("📦 Create Data Backup (Download all JSONs)", on_click=create_backup, use_container_width=True)
-    st.caption("Creates a snapshot of your current Pillars, Shadows, Goals, and Chat histories.")
+    st.button("📦 Create Data Backup", on_click=create_backup, use_container_width=True)
+    st.warning("Note: Full data load/restore functions are currently disabled for stability.")
 
-    st.markdown("### Clear History")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("Clear V3 Advisor History", use_container_width=True):
-            st.session_state.v3_advisor_history = [{"role": "assistant", "text": "Welcome back! History cleared.", "is_user": False}]
-            st.session_state.unsaved_changes = True
-            st.rerun()
-            
-    with col2:
-        if st.button("Clear Super AI History", use_container_width=True):
-            st.session_state.super_ai_history = [{"role": "assistant", "text": "Rebooting analysis engine. History cleared.", "is_user": False}]
-            st.session_state.unsaved_changes = True
-            st.rerun()
-
-    with col3:
-        if st.button("Clear BOL Academy History", use_container_width=True):
-            st.session_state.bol_academy_history = [{"role": "assistant", "text": "Academy history reset. Ready for Course 1.", "is_user": False}]
-            st.session_state.unsaved_changes = True
-            st.rerun()
-            
     st.markdown("---")
-    
-    st.markdown("### System Information")
-    st.markdown(f"""
-    - **App ID:** `{APP_ID}`
-    - **Model Used:** `{GEMINI_MODEL}`
-    - **Authentication Status:** {'Authenticated' if initialAuthToken else 'Unauthenticated/Anonymous'}
-    - **Firebase Config Loaded:** {'Yes' if firebaseConfig else 'No'}
-    """)
+    st.markdown("### Environment Status")
+    st.json({
+        "APP_ID": APP_ID,
+        "User_ID": st.session_state.user_id,
+        "GEMINI_MODEL": GEMINI_MODEL,
+        "Firebase_Config_Loaded": bool(firebaseConfig)
+    })
+    st.info("**AI Key Check:** If you are seeing `403 Forbidden` errors in the chat interfaces, the AI service is not receiving a valid API key. Please ensure your key is correctly set in your execution environment.", icon="🚨")
 
+# --- Main Application Logic ---
 
-# --- Main Application Execution ---
+def main_app():
+    # Streamlit configuration must be the first command
+    st.set_page_config(
+        page_title="V3 Sovereign OS",
+        page_icon="🎯",
+        layout="wide"
+    )
 
-def main():
-    """Main entry point for the Streamlit application."""
-    st.set_page_config(layout="wide", page_title="V3 Sovereign OS")
-    
-    # 1. Load CSS
-    # Note: Using get_base_path('style.css') here, but included fallback CSS 
-    # within load_css function in case the file doesn't exist yet.
-    load_css(get_base_path('style.css'))
-    
-    # 2. Initialize Data and State
+    # 1. Initialization and Data Loading
     initialize_session_state()
+    load_css(get_base_path('style.css')) # Load CSS after session state setup
 
-    # 3. Render Sidebar
+    # 2. Sidebar Navigation
     render_sidebar()
-
-    # 4. Render Main Content based on State
-    if st.session_state.page == 'Dashboard':
+    
+    # 3. Main Content Router
+    if st.session_state.page == "Dashboard":
         render_dashboard()
-    elif st.session_state.page == 'Pillars & Shadows':
+    elif st.session_state.page == "Pillars & Shadows":
         render_pillars_shadows()
-    elif st.session_state.page == 'Goals':
+    elif st.session_state.page == "Goals":
         render_goals()
-    elif st.session_state.page == 'Tasks':
+    elif st.session_state.page == "Tasks":
         render_tasks()
-    elif st.session_state.page == 'V3 Advisor':
+    elif st.session_state.page == "V3 Advisor":
         render_v3_advisor()
-    elif st.session_state.page == 'Super AI':
+    elif st.session_state.page == "Super AI":
         render_super_ai()
-    elif st.session_state.page == 'BOL Academy':
+    elif st.session_state.page == "BOL Academy":
         render_bol_academy()
-    elif st.session_state.page == 'Settings':
+    elif st.session_state.page == "Settings":
         render_settings()
-        
-    # 5. Check for missing packages (requests for AI)
-    try:
-        import requests
-    except ImportError:
-        st.sidebar.warning("🚨 Missing 'requests' package. AI coaches are disabled. Run `pip install requests`.")
 
-
-if __name__ == '__main__':
-    main()
+# Execute the main app function
+if __name__ == "__main__":
+    main_app()
