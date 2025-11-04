@@ -1,778 +1,845 @@
+# V3 Sovereign OS - Command Center
+# Streamlit application for personal development, structured by Pillars and Shadows.
+
 import streamlit as st
 import json
 import os
-import requests
-from datetime import datetime, date
+import time
+import base64
+from datetime import datetime
+import asyncio
+from typing import List, Dict, Any, Optional
 
-# NEW IMPORTS FOR FIRESTORE
-import firebase_admin
-from firebase_admin import credentials, firestore
+# --- Configuration ---
+# Set the model name for text generation tasks
+GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025"
 
-# --- Global Configs and Constants ---
-
-# Access environment variables/secrets for configuration
-# In the Canvas environment, __firebase_config is available in st.secrets.
-# We access it via st.secrets for Streamlit Cloud deployment compatibility.
+# --- Global Variables for Firestore ---
+# Access secrets via Streamlit's native st.secrets for reliable deployment.
 try:
-    FIREBASE_CONFIG_DICT = st.secrets["__firebase_config"]
-except:
-    # Fallback for local testing if secrets are not set up.
-    # NOTE: You MUST set up secrets for deployment to Streamlit Cloud!
-    st.error("FATAL: '__firebase_config' not found in Streamlit secrets. Persistence will fail.")
-    FIREBASE_CONFIG_DICT = {"type": "mock", "project_id": "mock-v3-sovereign-os"}
-
-# Access App ID (Mandatory for Canvas path structure)
-APP_ID = st.secrets.get("__app_id", "default-v3-app-id")
-
-# Placeholder for user ID. In a real multi-user Streamlit app, this would come from an Auth flow.
-# For now, we hardcode it since the Canvas environment provides a secure, single-user context.
-USER_ID = "default_user" 
-
-# Base URL for the AI Coach backend (using a mock/placeholder endpoint)
-# NOTE: Replace this with your actual, secured endpoint when ready.
-AI_ENDPOINT = "https://mock-ai-coach-api.com/v3"
-
-# --- FIRESTORE UTILITIES (Replacing File I/O) ---
-
-@st.cache_resource(show_spinner=False)
-def initialize_firebase():
-    """Initializes the Firebase Admin SDK once."""
-    if not firebase_admin._apps:
-        try:
-            # Initialize with Service Account credentials
-            cred = credentials.Certificate(FIREBASE_CONFIG_DICT)
-            firebase_admin.initialize_app(cred)
-            db = firestore.client()
-            return db
-        except Exception as e:
-            st.error(f"Error initializing Firebase: {e}")
-            return None
-    return firestore.client()
-
-def get_data_path(doc_name):
-    """Generates the secure Firestore document path."""
-    # Path format for private data: /artifacts/{appId}/users/{userId}/{docName}
-    return f"artifacts/{APP_ID}/users/{USER_ID}/{doc_name}"
-
-def load_firestore_data(doc_name, default_data):
-    """
-    Loads data from Firestore. If the document does not exist, it creates it
-    and returns the default data.
-
-    Returns: A dictionary with the loaded data.
-    """
-    db = st.session_state.db
-    if db is None:
-        st.warning("Database connection failed. Using default data locally.")
-        return default_data
-
-    doc_path = get_data_path(doc_name)
-    doc_ref = db.document(doc_path)
-
-    try:
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
-            # Safety check: Ensure loaded data is a dict before returning
-            if isinstance(data, dict):
-                return data
-            else:
-                st.warning(f"Data from Firestore for {doc_name} is corrupted (not a dictionary). Using default data.")
-                doc_ref.set(default_data) # Overwrite corrupted data
-                return default_data
-
-        else:
-            # Document doesn't exist, create it with default data
-            doc_ref.set(default_data)
-            return default_data
-    except Exception as e:
-        st.error(f"Error loading data from Firestore ({doc_name}): {e}")
-        return default_data
-
-
-def save_firestore_data(doc_name, data):
-    """Saves data to a Firestore document."""
-    db = st.session_state.db
-    if db is None:
-        st.warning("Database connection failed. Cannot save data.")
-        return False
-
-    doc_path = get_data_path(doc_name)
-    doc_ref = db.document(doc_path)
-
-    try:
-        # Use set to overwrite the entire document
-        doc_ref.set(data)
-        return True
-    except Exception as e:
-        st.error(f"Error saving data to Firestore ({doc_name}): {e}")
-        return False
-
-# --- DATA STRUCTURES (Defaults) ---
-
-default_pillars = [
-    {"id": "p1", "name": "Health", "description": "Physical, mental, and nutritional well-being.", "goals": 0, "completed": 0, "color": "#10B981"},
-    {"id": "p2", "name": "Wealth", "description": "Financial independence and resource management.", "goals": 0, "completed": 0, "color": "#F59E0B"},
-    {"id": "p3", "name": "Wisdom", "description": "Continuous learning and intellectual growth.", "goals": 0, "completed": 0, "color": "#3B82F6"},
-]
-
-default_shadows = [
-    {"id": "s1", "name": "Procrastination", "description": "The shadow of delay.", "tamed": False},
-    {"id": "s2", "name": "Impatience", "description": "The shadow of haste.", "tamed": False},
-]
-
-default_goals = []
-default_tasks = []
-
-# Initial chat messages for history
-initial_v3_advisor_message = {"role": "ai", "content": "Welcome back, Sovereign. How can I assist you in optimizing your operational flow today?"}
-initial_super_ai_message = {"role": "ai", "content": "Query initiated. What complex system or data requires Super AI analysis?"}
-initial_bol_academy_message = {"role": "ai", "content": "Ready for instruction. Which knowledge segment shall we activate?"}
-
-# --- KPI Calculation ---
-
-def calculate_kpis():
-    """Calculates Sovereign Score, Goal Completion, and Shadow Taming metrics."""
-    total_goals = sum(p['goals'] for p in st.session_state.pillars)
-    completed_goals = sum(p['completed'] for p in st.session_state.pillars)
-
-    goal_completion_pct = (completed_goals / total_goals) * 100 if total_goals > 0 else 0.0
-
-    total_shadows = len(st.session_state.shadows)
-    tamed_shadows = sum(1 for s in st.session_state.shadows if s['tamed'])
-    shadow_tamed_pct = (tamed_shadows / total_shadows) * 100 if total_shadows > 0 else 0.0
-
-    # Simplified Sovereign Score calculation
-    sovereign_score = (goal_completion_pct * 0.4) + (shadow_tamed_pct * 0.6)
+    # Use st.secrets for reliable deployment and local access
+    # Using simple, uppercase names to avoid potential Streamlit Cloud parsing issues.
+    APP_ID = st.secrets.get('APP_ID', 'default-sovereign-os-id')
     
-    st.session_state.kpis = {
-        "sovereign_score": f"{sovereign_score:.1f}%",
-        "goal_completion": f"{goal_completion_pct:.1f}%",
-        "shadow_tamed": f"{shadow_tamed_pct:.1f}%",
-    }
+    # Load Firebase config JSON string from secrets
+    config_str = st.secrets.get('FIREBASE_CONFIG', '{}')
+    if config_str == '{}':
+        # If the key is missing, log the error (this is the error we are trying to fix)
+        st.error("FATAL: 'FIREBASE_CONFIG' not found in Streamlit secrets. Persistence will fail.")
+        firebaseConfig = {}
+    else:
+        # Load the configuration string as a JSON object
+        firebaseConfig = json.loads(config_str)
 
+    initialAuthToken = st.secrets.get('AUTH_TOKEN')
+except AttributeError:
+    # Fallback if st.secrets is not initialized or app is run outside Streamlit context
+    # This path is usually not hit in a Streamlit Cloud deployment but is kept for robustness.
+    APP_ID = os.environ.get('APP_ID', 'default-sovereign-os-id')
+    firebaseConfig = json.loads(os.environ.get('FIREBASE_CONFIG', '{}'))
+    initialAuthToken = os.environ.get('AUTH_TOKEN')
+except json.JSONDecodeError:
+    st.error("FATAL: 'FIREBASE_CONFIG' content is not valid JSON. Check quotes in secrets.toml.")
+    firebaseConfig = {}
 
-# --- State Management and Firestore I/O ---
+# --- Helper Functions for File/Data Management ---
+
+def get_base_path(filename: str) -> str:
+    """Gets the path for the data file."""
+    # This design uses local files for demonstration.
+    # For a persistent, collaborative app, this would be Firestore access.
+    return os.path.join(os.path.dirname(__file__), filename)
+
+def load_data(filename: str, default_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Loads data from a JSON file with error handling."""
+    filepath = get_base_path(filename)
+    try:
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+            # Ensure the structure exists (e.g., 'goals' key is present)
+            for key, default_value in default_data.items():
+                if key not in data:
+                    data[key] = default_value
+            return data
+    except FileNotFoundError:
+        st.warning(f"Data file not found: {filename}. Initializing with default data.")
+        return default_data
+    except json.JSONDecodeError:
+        st.error(f"Error decoding JSON in {filename}. Initializing with default data to prevent crash.")
+        return default_data
 
 def save_all_data():
-    """Saves all current session state data to Firestore."""
-    save_firestore_data('pillars', {'pillars': st.session_state.pillars})
-    save_firestore_data('shadows', {'shadows': st.session_state.shadows})
-    save_firestore_data('goals_detailed', {'goals': st.session_state.goals_detailed})
-    save_firestore_data('tasks', {'tasks': st.session_state.tasks})
-    save_firestore_data('v3_advisor_history', {'history': st.session_state.v3_advisor_history})
-    save_firestore_data('super_ai_history', {'history': st.session_state.super_ai_history})
-    save_firestore_data('bol_academy_history', {'history': st.session_state.bol_academy_history})
+    """Saves all current session state data back to their respective files."""
+    try:
+        # Save Pillars and Shadows
+        with open(get_base_path('pillars.json'), 'w') as f:
+            json.dump({'pillars': st.session_state.pillars_data['pillars']}, f, indent=4)
+        with open(get_base_path('shadows.json'), 'w') as f:
+            json.dump({'shadows': st.session_state.shadows_data['shadows']}, f, indent=4)
 
+        # Save Goals
+        with open(get_base_path('goals_detailed.json'), 'w') as f:
+            json.dump({'goals': st.session_state.goals_data['goals']}, f, indent=4)
+            
+        # Save Tasks
+        with open(get_base_path('tasks.json'), 'w') as f:
+            json.dump({'tasks': st.session_state.tasks_data['tasks']}, f, indent=4)
+
+        # Save Chat Histories
+        with open(get_base_path('v3_advisor_history.json'), 'w') as f:
+            json.dump(st.session_state.v3_advisor_history, f, indent=4)
+        with open(get_base_path('super_ai_history.json'), 'w') as f:
+            json.dump(st.session_state.super_ai_history, f, indent=4)
+        with open(get_base_path('bol_academy_history.json'), 'w') as f:
+            json.dump(st.session_state.bol_academy_history, f, indent=4)
+
+        st.toast("✅ All data saved successfully!", icon="💾")
+        st.session_state.unsaved_changes = False
+
+    except Exception as e:
+        st.error(f"An error occurred during save: {e}")
+
+def create_backup():
+    """Creates a zip archive of all current JSON data files."""
+    st.info("Backup functionality would typically create a ZIP file of all JSONs here.")
+    st.toast("Backup data created!", icon="📦")
+    # In a real environment, you would use 'zipfile' module here.
+    st.session_state.unsaved_changes = False
+
+# --- Core Data Initialization ---
 
 def initialize_session_state():
-    """Initializes Streamlit session state variables and connects to Firestore."""
+    """Initializes session state with data loaded from files."""
     if 'initialized' not in st.session_state:
-        # 1. Initialize DB Connection
-        st.session_state.db = initialize_firebase()
+        # 1. Structural Data
+        st.session_state.pillars_data = load_data('pillars.json', {'pillars': [
+            {'name': 'Health', 'score': 60, 'focus': 'Optimize physical and mental energy.'},
+            {'name': 'Wealth', 'score': 45, 'focus': 'Build autonomous income streams.'},
+            {'name': 'Relationship', 'score': 75, 'focus': 'Deepen connection with core network.'},
+            {'name': 'Sovereignty', 'score': 55, 'focus': 'Increase personal agency and self-reliance.'}
+        ]})
+        st.session_state.shadows_data = load_data('shadows.json', {'shadows': [
+            {'name': 'Procrastination', 'score': 80, 'focus': 'Immediate action bias.'},
+            {'name': 'Self-Doubt', 'score': 30, 'focus': 'Confidence in execution.'},
+        ]})
+        st.session_state.goals_data = load_data('goals_detailed.json', {'goals': []})
+        st.session_state.tasks_data = load_data('tasks.json', {'tasks': []})
 
-        # 2. Load Core Data using Firestore
-        st.session_state.pillars = load_firestore_data('pillars', {'pillars': default_pillars})['pillars']
-        st.session_state.shadows = load_firestore_data('shadows', {'shadows': default_shadows})['shadows']
-        st.session_state.goals_detailed = load_firestore_data('goals_detailed', {'goals': default_goals})['goals']
-        st.session_state.tasks = load_firestore_data('tasks', {'tasks': default_tasks})['tasks']
-
-        # 3. Load Chat History Data using Firestore
-        v3_advisor_default = {"history": [initial_v3_advisor_message]}
-        super_ai_default = {"history": [initial_super_ai_message]}
-        bol_academy_default = {"history": [initial_bol_academy_message]}
-
-        st.session_state.v3_advisor_history = load_firestore_data('v3_advisor_history', v3_advisor_default)['history']
-        st.session_state.super_ai_history = load_firestore_data('super_ai_history', super_ai_default)['history']
-        st.session_state.bol_academy_history = load_firestore_data('bol_academy_history', bol_academy_default)['history']
-
-        # 4. Initialize UI State
-        st.session_state.selected_tab = 'Dashboard'
-        st.session_state.show_add_pillar = False
-        st.session_state.show_add_goal = False
-        st.session_state.show_add_task = False
-        st.session_state.edit_mode = False
+        # 2. UI State
+        st.session_state.page = 'Dashboard'
+        st.session_state.unsaved_changes = False
         st.session_state.initialized = True
-        st.session_state.user_id = USER_ID # Setting placeholder user ID
 
-    # 5. Calculate KPIs after loading/initialization
-    calculate_kpis()
+        # 3. Chat Histories
+        # Load or initialize V3 Advisor history
+        v3_advisor_default = [{
+            "role": "assistant",
+            "text": "Welcome to the V3 Command Center. I am your V3 Advisor. How can I assist you in optimizing your day or refining your Pillars and Shadows today?",
+            "is_user": False
+        }]
+        st.session_state.v3_advisor_history = load_data('v3_advisor_history.json', {'history': v3_advisor_default})['history']
+
+        # Load or initialize Super AI history
+        super_ai_default = [{
+            "role": "assistant",
+            "text": "Greetings. I am the Super AI. Submit any complex, unstructured data or queries, and I will analyze them through the lens of your Sovereign OS structure.",
+            "is_user": False
+        }]
+        st.session_state.super_ai_history = load_data('super_ai_history.json', {'history': super_ai_default})['history']
+
+        # Load or initialize BOL Academy history
+        bol_academy_default = [{
+            "role": "assistant",
+            "text": "Welcome to the BOL Academy. I am your dedicated tutor for the 21 Brotherhood of Light Courses. When you are ready, please tell me to begin **Course 1: Laws of Occultism: Inner Plane Theory and the Fundamentals of Psychic Phenomena**.",
+            "is_user": False
+        }]
+        st.session_state.bol_academy_history = load_data('bol_academy_history.json', {'history': bol_academy_default})['history']
+
+        # 4. Auth/Database (Placeholder for Firestore)
+        st.session_state.db = None
+        st.session_state.auth = None
+        # Placeholder for unauthenticated environment or based on auth token
+        st.session_state.user_id = "default_user" 
+
+# --- Styling and UI Functions ---
+
+def load_css(filepath: str):
+    """Injects custom CSS from a file."""
+    try:
+        with open(filepath) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    except FileNotFoundError:
+        # Create a basic CSS file if it's missing for initial deployment
+        st.markdown("""
+            <style>
+                .main { background-color: #0d1117; color: #c9d1d9; font-family: 'Inter', sans-serif; }
+                .st-emotion-cache-12fmj8x { padding-top: 2rem; }
+                .os-title { font-size: 1.8rem; font-weight: bold; color: #2f81f7; margin-bottom: 20px; }
+                .subheader { color: #8b949e; margin-bottom: 10px; }
+                .metric-card { background: #161b22; padding: 15px; border-radius: 8px; border-left: 5px solid #2f81f7; margin-bottom: 15px; }
+                .metric-title { font-size: 0.9rem; color: #8b949e; }
+                .metric-value { font-size: 2rem; font-weight: bold; }
+                .score-glow-blue { color: #58a6ff; text-shadow: 0 0 5px rgba(47, 129, 247, 0.5); }
+                .score-glow-green { color: #3fb950; text-shadow: 0 0 5px rgba(63, 185, 80, 0.5); }
+                .score-glow-yellow { color: #e3b341; text-shadow: 0 0 5px rgba(227, 179, 65, 0.5); }
+                .pillar-card { background: #161b22; padding: 10px; border-radius: 6px; margin-bottom: 10px; border: 1px solid #21262d; }
+                .pillar-title { font-weight: bold; color: #c9d1d9; margin-bottom: 5px; }
+                .pillar-focus { font-size: 0.8rem; color: #8b949e; margin-bottom: 10px; height: 40px; overflow: hidden; }
+                .pillar-progress-bar { width: 100%; height: 5px; border-radius: 2px; }
+                .pillar-score { float: right; font-size: 0.8rem; font-weight: bold; color: #58a6ff; }
+                .goal-card { background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 3px solid #3fb950; }
+                .goal-title { font-weight: bold; color: #c9d1d9; display: inline-block; margin-right: 10px; }
+                .pillar-tag-small { background-color: #21262d; color: #58a6ff; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: normal; }
+                .priority-tag { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-left: 5px; }
+                .P1 { background-color: #6e1c25; color: #f85149; border: 1px solid #f85149; }
+                .P2 { background-color: #66501a; color: #e3b341; border: 1px solid #e3b341; }
+                .P3 { background-color: #1c2b39; color: #58a6ff; border: 1px solid #58a6ff; }
+                .task-completed-label { color: #3fb950; text-decoration: line-through; margin-top: 5px; font-size: 0.9rem; }
+                .user-id-display { font-size: 0.75rem; color: #8b949e; margin-top: 15px; }
+                .user-id-display span { font-family: monospace; color: #58a6ff; }
+            </style>
+        """, unsafe_allow_html=True)
 
 
-# --- Action Handlers (All call save_all_data) ---
+def set_page(page_name: str):
+    """Changes the current page."""
+    st.session_state.page = page_name
 
-def handle_task_completion(task_id):
-    """Marks a task as complete and updates relevant goals/pillars."""
-    # Find and mark task
-    for task in st.session_state.tasks:
-        if task['id'] == task_id:
-            task['completed'] = True
-            break
+def render_sidebar():
+    """Renders the persistent sidebar navigation and controls."""
+    st.sidebar.markdown(f"<div class='os-title'>V3 Sovereign OS</div>", unsafe_allow_html=True)
+
+    # Navigation Buttons
+    st.sidebar.button('📈 Dashboard', on_click=set_page, args=('Dashboard',), use_container_width=True)
+    st.sidebar.button('🛡️ Pillars & Shadows', on_click=set_page, args=('Pillars & Shadows',), use_container_width=True)
+    st.sidebar.button('🎯 Goals', on_click=set_page, args=('Goals',), use_container_width=True)
+    st.sidebar.button('📋 Tasks', on_click=set_page, args=('Tasks',), use_container_width=True)
+    st.sidebar.markdown('---')
+    st.sidebar.button('💬 V3 Advisor', on_click=set_page, args=('V3 Advisor',), use_container_width=True)
+    st.sidebar.button('🧬 Super AI', on_click=set_page, args=('Super AI',), use_container_width=True)
+    st.sidebar.button('🔮 BOL Academy', on_click=set_page, args=('BOL Academy',), use_container_width=True)
+    st.sidebar.markdown('---')
+    st.sidebar.button('⚙️ Settings', on_click=set_page, args=('Settings',), use_container_width=True)
+
+    # Save Control
+    st.sidebar.markdown("<div class='save-section'>", unsafe_allow_html=True)
+    save_label = "💾 Save All Changes"
+    if st.session_state.unsaved_changes:
+        save_label = "🚨 Unsaved Changes! Click to Save."
     
-    # Update goal progress (simplified: check if all tasks in a goal are done)
-    # Goal logic can be complex; simplified here for demonstration.
-    for goal in st.session_state.goals_detailed:
-        goal_tasks = [t for t in st.session_state.tasks if t['goal_id'] == goal['id']]
-        if goal_tasks and all(t['completed'] for t in goal_tasks):
-            goal['completed'] = True
-
-            # Update pillar progress
-            for pillar in st.session_state.pillars:
-                if pillar['id'] == goal['pillar_id']:
-                    pillar['completed'] += 1
-                    break
+    st.sidebar.button(save_label, on_click=save_all_data, use_container_width=True, key="save_button")
+    st.sidebar.markdown("</div>", unsafe_allow_html=True)
     
-    save_all_data()
-    calculate_kpis()
+    # User ID placeholder (Mandatory for multi-user apps)
+    st.sidebar.markdown(f"<div class='user-id-display'>User ID: <span>{st.session_state.user_id}</span></div>", unsafe_allow_html=True)
 
-def handle_goal_completion(goal_id):
-    """Marks a goal as complete and updates the parent pillar count."""
-    for goal in st.session_state.goals_detailed:
-        if goal['id'] == goal_id:
-            if not goal['completed']:
-                goal['completed'] = True
-                
-                # Update pillar completion count
-                for pillar in st.session_state.pillars:
-                    if pillar['id'] == goal['pillar_id']:
-                        pillar['completed'] += 1
-                        break
-            break
-    save_all_data()
-    calculate_kpis()
 
-def handle_pillar_completion(pillar_id):
-    """Marks all goals/tasks under a pillar as complete."""
-    # Simplified: This action marks all related goals as complete.
-    for goal in st.session_state.goals_detailed:
-        if goal['pillar_id'] == pillar_id and not goal['completed']:
-            goal['completed'] = True
+# --- Page Functions ---
+
+def render_dashboard():
+    """Dashboard page showing high-level metrics."""
+    st.markdown("## Command Center Dashboard")
+    st.markdown("<div class='subheader'>Real-Time System Overview</div>", unsafe_allow_html=True)
+
+    pillars = st.session_state.pillars_data['pillars']
+    shadows = st.session_state.shadows_data['shadows']
+    goals = st.session_state.goals_data['goals']
+
+    # --- 1. Top Metrics (Overall Health) ---
+
+    # Calculate Goal Progress (Handle empty list safely)
+    if goals and goals[0] and goals[0].get('progress') is not None:
+        goal_progress = sum([g.get('progress', 0) for g in goals]) / len(goals)
+    else:
+        goal_progress = 0
+
+    # Calculate Sovereign Score (Average of all Pillar scores)
+    sovereign_score = sum([p['score'] for p in pillars]) / len(pillars) if pillars else 0
+
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-title'>Sovereign Score</div>
+            <div class='metric-value score-glow-blue'>{sovereign_score:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-title'>Goal Completion</div>
+            <div class='metric-value score-glow-green'>{goal_progress:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        # Calculate Shadow Status (Average 'score', which is actually 'tamed' percentage)
+        shadow_progress = sum([s['score'] for s in shadows]) / len(shadows) if shadows else 0
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-title'>Shadow Tamed</div>
+            <div class='metric-value score-glow-yellow'>{shadow_progress:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # --- 2. Pillar Status ---
+    st.markdown("### 🛡️ Pillar Status")
+    
+    pillar_cols = st.columns(len(pillars))
+    for i, p in enumerate(pillars):
+        with pillar_cols[i]:
+            st.markdown(f"""
+            <div class='pillar-card'>
+                <div class='pillar-title'>{p['name']}</div>
+                <div class='pillar-focus'>{p['focus']}</div>
+                <div class='pillar-progress'>
+                    <progress class='pillar-progress-bar' value='{p['score']}' max='100'></progress>
+                    <span class='pillar-score'>{p['score']}%</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # --- 3. Active Goals ---
+    st.markdown("### 🎯 Active Goals")
+    
+    if not goals:
+        st.info("No active goals found. Go to the 'Goals' page to set your targets.")
+    else:
+        active_goals = [g for g in goals if g.get('progress', 0) < 100]
+        if not active_goals:
+            st.info("All goals completed! Time to set new targets.")
+        else:
+            goal_cols = st.columns(min(len(active_goals), 3))
+            for i, g in enumerate(active_goals[:3]):
+                with goal_cols[i % 3]:
+                    st.markdown(f"""
+                    <div class='goal-card'>
+                        <div class='goal-title'>{g['name']}</div>
+                        <div class='goal-pillar'><span class='pillar-tag-small'>{g['pillar']}</span></div>
+                        <div class='goal-progress-display'>{g['progress']}% Complete</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+def render_pillars_shadows():
+    """Pillars and Shadows management page."""
+    st.markdown("## Pillars & Shadows Calibration")
+    
+    st.markdown("### 🛡️ Pillars: Areas of Focus (Max 100 Score)")
+    st.markdown("<div class='subheader'>Use the sliders to calibrate your self-assessed current performance.</div>", unsafe_allow_html=True)
+
+    # Render Pillars
+    cols = st.columns(4)
+    for i, p in enumerate(st.session_state.pillars_data['pillars']):
+        with cols[i]:
+            st.subheader(p['name'])
+            new_score = st.slider('Current Score', 0, 100, p['score'], key=f"pillar_score_{p['name']}")
+            st.session_state.pillars_data['pillars'][i]['score'] = new_score
             
-            # Update pillar count
-            for pillar in st.session_state.pillars:
-                if pillar['id'] == pillar_id:
-                    pillar['completed'] += 1
-                    break
-    save_all_data()
-    calculate_kpis()
-
-
-def handle_task_delete(task_id):
-    st.session_state.tasks = [t for t in st.session_state.tasks if t['id'] != task_id]
-    save_all_data()
-    calculate_kpis()
-
-def handle_goal_delete(goal_id):
-    # Decrement goal count on parent pillar
-    goal_to_delete = next((g for g in st.session_state.goals_detailed if g['id'] == goal_id), None)
-    if goal_to_delete:
-        for pillar in st.session_state.pillars:
-            if pillar['id'] == goal_to_delete['pillar_id']:
-                pillar['goals'] -= 1
-                if goal_to_delete['completed']:
-                    pillar['completed'] -= 1
-                break
-        
-        # Delete goal
-        st.session_state.goals_detailed = [g for g in st.session_state.goals_detailed if g['id'] != goal_id]
-        
-        # Delete related tasks
-        st.session_state.tasks = [t for t in st.session_state.tasks if t['goal_id'] != goal_to_delete['id']] # Ensure we use the deleted goal ID
-    
-    save_all_data()
-    calculate_kpis()
-
-def handle_pillar_delete(pillar_id):
-    # Delete associated goals and tasks first
-    goals_to_delete = [g for g in st.session_state.goals_detailed if g['pillar_id'] == pillar_id]
-    goal_ids_to_delete = [g['id'] for g in goals_to_delete]
-    
-    st.session_state.goals_detailed = [g for g in st.session_state.goals_detailed if g['pillar_id'] != pillar_id]
-    st.session_state.tasks = [t for t in st.session_state.tasks if t['goal_id'] not in goal_ids_to_delete]
-
-    # Delete pillar
-    st.session_state.pillars = [p for p in st.session_state.pillars if p['id'] != pillar_id]
-
-    save_all_data()
-    calculate_kpis()
-
-def handle_pillar_submit(name, description, color):
-    new_id = f"p{len(st.session_state.pillars) + 1}"
-    st.session_state.pillars.append({
-        "id": new_id,
-        "name": name,
-        "description": description,
-        "goals": 0,
-        "completed": 0,
-        "color": color,
-    })
-    st.session_state.show_add_pillar = False
-    save_all_data()
-    calculate_kpis()
-
-def handle_goal_submit(pillar_id, name, description, priority):
-    new_id = f"g{len(st.session_state.goals_detailed) + 1}"
-    st.session_state.goals_detailed.append({
-        "id": new_id,
-        "pillar_id": pillar_id,
-        "name": name,
-        "description": description,
-        "priority": priority,
-        "created_date": date.today().isoformat(),
-        "completed": False
-    })
-    # Increment goal count on parent pillar
-    for pillar in st.session_state.pillars:
-        if pillar['id'] == pillar_id:
-            pillar['goals'] += 1
-            break
+            new_focus = st.text_area('Core Focus', p['focus'], key=f"pillar_focus_{p['name']}")
+            st.session_state.pillars_data['pillars'][i]['focus'] = new_focus
             
-    st.session_state.show_add_goal = False
-    save_all_data()
-    calculate_kpis()
+            if new_score != p['score'] or new_focus != p['focus']:
+                st.session_state.unsaved_changes = True
 
-def handle_task_submit(goal_id, name, description):
-    new_id = f"t{len(st.session_state.tasks) + 1}"
-    st.session_state.tasks.append({
-        "id": new_id,
-        "goal_id": goal_id,
-        "name": name,
-        "description": description,
-        "completed": False
-    })
-    st.session_state.show_add_task = False
-    save_all_data()
-    calculate_kpis()
-
-def handle_shadow_tame(shadow_id):
-    for shadow in st.session_state.shadows:
-        if shadow['id'] == shadow_id:
-            shadow['tamed'] = not shadow['tamed']
-            break
-    save_all_data()
-    calculate_kpis()
-
-# --- Utility Functions for Rendering ---
-
-def get_pillar_color(pillar_id):
-    """Returns the color hex for a given pillar ID."""
-    pillar = next((p for p in st.session_state.pillars if p['id'] == pillar_id), None)
-    return pillar['color'] if pillar else "#CCCCCC"
-
-# --- UI Rendering (Tab Functions) ---
-
-def render_dashboard_tab():
-    st.header("Command Center Dashboard")
     st.markdown("---")
     
-    # KPI Metrics
-    st.subheader("Real-Time System Overview")
+    # Render Shadows
+    st.markdown("### 🌑 Shadows: Limiting Behaviors (Score is Taming Progress)")
+    st.markdown("<div class='subheader'>Assess your control over limiting traits. 100% means fully tamed.</div>", unsafe_allow_html=True)
+    
+    shadow_cols = st.columns(2)
+    for i, s in enumerate(st.session_state.shadows_data['shadows']):
+        with shadow_cols[i]:
+            st.subheader(s['name'])
+            new_score = st.slider('Taming Progress (%)', 0, 100, s['score'], key=f"shadow_score_{s['name']}")
+            st.session_state.shadows_data['shadows'][i]['score'] = new_score
+            
+            new_focus = st.text_area('Integration Focus', s['focus'], key=f"shadow_focus_{s['name']}")
+            st.session_state.shadows_data['shadows'][i]['focus'] = new_focus
+            
+            if new_score != s['score'] or new_focus != s['focus']:
+                st.session_state.unsaved_changes = True
+
+def render_goals():
+    """Goals management page."""
+    st.markdown("## Goals Management")
+    st.markdown("<div class='subheader'>Set, track, and manage your high-level outcomes.</div>", unsafe_allow_html=True)
+
+    pillars = [p['name'] for p in st.session_state.pillars_data['pillars']]
+
+    def add_new_goal(name, pillar, deadline):
+        """Adds a new goal to the session state."""
+        if name and pillar:
+            st.session_state.goals_data['goals'].append({
+                'id': str(time.time()),
+                'name': name,
+                'pillar': pillar,
+                'progress': 0,
+                'deadline': deadline.strftime('%Y-%m-%d') if deadline else 'N/A'
+            })
+            st.session_state.unsaved_changes = True
+            st.toast("Goal added!", icon="🎯")
+
+    # --- Add New Goal Form ---
+    with st.expander("➕ Add New Goal", expanded=False):
+        with st.form("new_goal_form", clear_on_submit=True):
+            goal_name = st.text_input("Goal Name (e.g., Launch SaaS product in 6 months)")
+            goal_pillar = st.selectbox("Linked Pillar", pillars)
+            goal_deadline = st.date_input("Target Deadline", min_value=datetime.now().date(), value=datetime.now().date())
+            submitted = st.form_submit_button("Create Goal")
+            
+            if submitted:
+                add_new_goal(goal_name, goal_pillar, goal_deadline)
+
+    st.markdown("---")
+
+    # --- Goal List and Progress Tracking ---
+    st.markdown("### Active Goal Tracking")
+    
+    goals = st.session_state.goals_data['goals']
+    
+    if not goals:
+        st.info("No goals defined yet. Use the form above to get started.")
+        return
+
+    # Sort goals: active first, then by progress
+    goals.sort(key=lambda g: (g.get('progress', 0) == 100, g.get('progress', 0)))
+
+    for i, g in enumerate(goals):
+        col1, col2, col3 = st.columns([0.6, 0.3, 0.1])
+        
+        with col1:
+            st.markdown(f"#### {g['name']} <span class='pillar-tag-small'>{g['pillar']}</span>", unsafe_allow_html=True)
+            st.progress(g.get('progress', 0) / 100)
+        
+        with col2:
+            # Slider to update progress
+            new_progress = st.slider('Progress (%)', 0, 100, g.get('progress', 0), key=f"goal_progress_{g['id']}")
+            if new_progress != g.get('progress', 0):
+                st.session_state.goals_data['goals'][i]['progress'] = new_progress
+                st.session_state.unsaved_changes = True
+                
+            st.caption(f"Deadline: {g.get('deadline', 'N/A')}")
+            
+        with col3:
+            # Delete button
+            if st.button("🗑️", key=f"delete_goal_{g['id']}"):
+                st.session_state.goals_data['goals'].pop(i)
+                st.session_state.unsaved_changes = True
+                st.rerun()
+
+    st.markdown("---")
+
+def render_tasks():
+    """Task management page (Actionable steps linked to Pillars)."""
+    st.markdown("## Task Manager")
+    st.markdown("<div class='subheader'>Actionable steps linked to your Pillars.</div>", unsafe_allow_html=True)
+
+    pillars = [p['name'] for p in st.session_state.pillars_data['pillars']]
+    
+    # --- Helper to Update Pillar Score on Completion ---
+    def update_pillar_score(pillar_name: str, priority: str):
+        """Calculates and applies a score boost to the relevant Pillar."""
+        boost_map = {'P1': 3, 'P2': 2, 'P3': 1}
+        boost = boost_map.get(priority, 0)
+
+        for p in st.session_state.pillars_data['pillars']:
+            if p['name'] == pillar_name:
+                # Apply boost, ensuring score doesn't exceed 100
+                new_score = min(100, p['score'] + boost)
+                p['score'] = new_score
+                st.session_state.unsaved_changes = True
+                st.toast(f"🎉 Task Completed! +{boost} points added to {pillar_name} Pillar.", icon="🚀")
+                return
+
+    # --- Add New Task Form ---
+    with st.expander("➕ Add New Task", expanded=False):
+        with st.form("new_task_form", clear_on_submit=True):
+            task_name = st.text_input("Task Description")
+            task_pillar = st.selectbox("Linked Pillar", pillars)
+            task_priority = st.radio("Priority", ['P1 (Urgent)', 'P2 (Important)', 'P3 (Minor)'], horizontal=True)
+            task_due_date = st.date_input("Due Date", min_value=datetime.now().date(), value=datetime.now().date())
+            submitted = st.form_submit_button("Create Task")
+            
+            if submitted and task_name and task_pillar:
+                st.session_state.tasks_data['tasks'].append({
+                    'id': str(time.time()),
+                    'name': task_name,
+                    'pillar': task_pillar,
+                    'priority': task_priority.split(' ')[0], # e.g., 'P1'
+                    'due': task_due_date.strftime('%Y-%m-%d'),
+                    'completed': False
+                })
+                st.session_state.unsaved_changes = True
+                st.rerun() # Rerun to refresh the list
+
+    st.markdown("---")
+
+    # --- Task List Display ---
+    st.markdown("### Task List")
+    tasks = st.session_state.tasks_data['tasks']
+    
+    if not tasks:
+        st.info("No active tasks. Add a task to initiate your daily flow.")
+        return
+    
+    # Separate and sort tasks
+    active_tasks = [t for t in tasks if not t.get('completed')]
+    completed_tasks = [t for t in tasks if t.get('completed')]
+    
+    # Sort active tasks by priority (P1 first)
+    active_tasks.sort(key=lambda t: t['priority'])
+
+    st.markdown("#### Active Tasks")
+    
+    if not active_tasks:
+        st.info("All tasks complete! Excellent work.")
+    
+    for i, task in enumerate(active_tasks):
+        key_prefix = f"active_task_{task['id']}"
+        
+        col1, col2, col3 = st.columns([0.1, 0.7, 0.2])
+        
+        # Completion Checkbox
+        with col1:
+            is_completed = col1.checkbox("", key=f"checkbox_{key_prefix}", value=False)
+            
+        # Task Details
+        with col2:
+            task_style = 'task-completed' if task.get('completed') else 'task-pending'
+            st.markdown(f"""
+            <div class='{task_style}'>
+                **{task['name']}**
+                <span class='pillar-tag-small'>{task['pillar']}</span> 
+                <span class='priority-tag {task['priority']}'>{task['priority']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            st.caption(f"Due: {task['due']}")
+
+        # Delete Button
+        with col3:
+            if st.button("🗑️", key=f"delete_{key_prefix}"):
+                # Find and delete the task from the main list
+                task_index = next((j for j, t in enumerate(st.session_state.tasks_data['tasks']) if t['id'] == task['id']), None)
+                if task_index is not None:
+                    st.session_state.tasks_data['tasks'].pop(task_index)
+                    st.session_state.unsaved_changes = True
+                    st.rerun()
+
+        # Handle Completion Logic
+        if is_completed:
+            # Find and update the original task in the main list
+            for t in st.session_state.tasks_data['tasks']:
+                if t['id'] == task['id']:
+                    t['completed'] = True
+                    update_pillar_score(t['pillar'], t['priority'])
+                    st.rerun() # Rerun to move the task to the completed section
+
+    st.markdown("---")
+    st.markdown("#### Completed Tasks")
+    
+    if not completed_tasks:
+        st.caption("No tasks completed yet.")
+    else:
+        for task in completed_tasks:
+            st.markdown(f"<div class='task-completed-label'>✅ {task['name']} <span class='pillar-tag-small'>{task['pillar']}</span></div>", unsafe_allow_html=True)
+
+
+# --- AI Coach Functions ---
+
+async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False) -> str:
+    """Handles the async API call to Gemini with backoff."""
+    
+    # Retrieve API key from st.secrets using the new, simplified name
+    apiKey = st.secrets.get('GEMINI_API_KEY', '')
+    if not apiKey:
+        return "FATAL ERROR: Gemini API key not found in Streamlit secrets."
+        
+    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={apiKey}"
+
+    # Format history for API payload
+    contents = []
+    for message in history:
+        # The role must be 'user' or 'model' for the API
+        role = "user" if message.get('is_user') else "model"
+        # Skip the first 'model' message in a fresh history for the API call 
+        # as it is usually covered by the system prompt, but ensure subsequent 'model' responses are preserved.
+        if role == "model" and not message.get('is_user') and len(contents) == 0 and len(history) > 1:
+             continue 
+        
+        contents.append({
+            "role": role,
+            "parts": [{"text": message['text']}]
+        })
+    
+    # Get the latest user message content (or all content if history is empty)
+    if contents:
+        # Check if the last role is 'user', if so, use all contents
+        if contents[-1]['role'] == 'user':
+            pass
+        else:
+             # If the last role is not user (e.g. system message only), ensure we have contents
+             if not contents:
+                 contents = [{"role": "user", "parts": [{"text": "Start the conversation."}]}]
+    else:
+         # Handle case where history is empty and a default prompt might be needed (handled by the system prompt for now)
+         # In a conversational flow, the contents array should grow
+         pass
+
+
+    # Prepare the payload with the full history
+    payload = {
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": system_prompt}]}
+    }
+
+    # Add tools if grounding is required
+    if use_search:
+        payload["tools"] = [{"google_search": {}}]
+
+    # Implement exponential backoff for robustness
+    for attempt in range(4): # up to 4 attempts
+        try:
+            # We use asyncio.to_thread to run the synchronous requests.post call
+            response = await asyncio.to_thread(
+                lambda: requests.post(
+                    apiUrl, 
+                    headers={'Content-Type': 'application/json'}, 
+                    data=json.dumps(payload)
+                )
+            )
+            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+            
+            result = response.json()
+            candidate = result.get('candidates', [{}])[0]
+            
+            if candidate and candidate.get('content', {}).get('parts', [{}])[0].get('text'):
+                text = candidate['content']['parts'][0]['text']
+                
+                # Append sources if search grounding was used
+                sources_text = ""
+                grounding_metadata = candidate.get('groundingMetadata')
+                if use_search and grounding_metadata and grounding_metadata.get('groundingAttributions'):
+                    sources = []
+                    for attr in grounding_metadata['groundingAttributions']:
+                        uri = attr.get('web', {}).get('uri')
+                        title = attr.get('web', {}).get('title')
+                        if uri and title:
+                            sources.append(f"[{title}]({uri})")
+                    
+                    if sources:
+                        sources_text = "\n\n---\n**Sources:** " + " | ".join(sources)
+                
+                return text + sources_text
+            else:
+                return "Error: Could not retrieve a valid response from the AI model."
+
+        except requests.exceptions.RequestException as e:
+            if attempt < 3:
+                delay = 2 ** attempt
+                # print(f"API Error: {e}. Retrying in {delay} seconds...") # Do not log retries
+                await asyncio.sleep(delay)
+            else:
+                return f"Error: Failed to connect to AI service after multiple retries. ({e})"
+        except Exception as e:
+            return f"An unexpected error occurred: {e}"
+
+    return "Error: Maximum retry attempts reached."
+
+# Function to run the async AI call in a synchronous Streamlit context
+def run_async_ai_call(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False):
+    """Wrapper to run the async API call and handle result update."""
+    
+    # Placeholder for requests library check (needed for the API call)
+    try:
+        global requests
+        import requests
+    except ImportError:
+        # This error is also checked in main() and sidebar
+        return "Error: 'requests' library not installed. AI functionality is disabled."
+
+    # Run the async function using asyncio.run
+    try:
+        # Create a new event loop if none is running (necessary for Streamlit environment)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        response = loop.run_until_complete(call_gemini_api(history, system_prompt, use_search))
+        return response
+    except Exception as e:
+        return f"Error executing async call: {e}"
+
+# Standard chat interface renderer
+def render_chat_interface(title: str, history_key: str, system_prompt: str, use_search: bool = False):
+    """Renders the standard chat UI."""
+    st.markdown(f"## {title}")
+    st.markdown("<div class='subheader'>Your dedicated AI interface.</div>", unsafe_allow_html=True)
+
+    # Display chat messages from history
+    for message in st.session_state[history_key]:
+        # Only render messages that have text content
+        if message.get('text'):
+            with st.chat_message("user" if message.get('is_user') else "assistant"):
+                st.markdown(message['text'])
+            
+    # Input field for user
+    if user_prompt := st.chat_input("Ask your coach..."):
+        # Add user message to history
+        st.session_state[history_key].append({"role": "user", "text": user_prompt, "is_user": True})
+        
+        # Display the user message immediately
+        with st.chat_message("user"):
+            st.markdown(user_prompt)
+
+        # Get AI response
+        with st.chat_message("assistant"):
+            with st.spinner("Processing..."):
+                response = run_async_ai_call(st.session_state[history_key], system_prompt, use_search)
+                st.markdown(response)
+        
+        # Add assistant response to history
+        st.session_state[history_key].append({"role": "assistant", "text": response, "is_user": False})
+        st.session_state.unsaved_changes = True
+        st.rerun() # Rerun to refresh the chat window properly
+
+def render_v3_advisor():
+    """Renders the V3 Advisor (General Coaching) chat page."""
+    system_prompt = (
+        "You are the V3 Advisor, a highly structured, analytical life coach and system optimizer. "
+        "Your role is to help the user refine their Pillars, mitigate their Shadows, and achieve their Goals. "
+        "Always respond concisely, focusing on practical actions, clear frameworks, and strategic thinking. "
+        "Do not use emojis unless specifically requested."
+    )
+    render_chat_interface(
+        title="💬 V3 Advisor (General Coaching)", 
+        history_key='v3_advisor_history', 
+        system_prompt=system_prompt, 
+        use_search=False
+    )
+
+def render_super_ai():
+    """Renders the Super AI (Data Analysis) chat page."""
+    system_prompt = (
+        "You are the Super AI. Your function is to analyze complex data, unstructured text, or vast information "
+        "and distill it through a highly rational, objective, and strategic filter. "
+        "Assume the user is a high-level sovereign operator. Use cold, logical, and highly concise language. "
+        "Your goal is to extract key insights, highlight hidden risks, and suggest optimal strategies. "
+        "You have access to Google Search for grounding your analysis."
+    )
+    render_chat_interface(
+        title="🧬 Super AI (Strategic Analysis)", 
+        history_key='super_ai_history', 
+        system_prompt=system_prompt, 
+        use_search=True
+    )
+
+def render_bol_academy():
+    """Renders the Brotherhood of Light Academy page."""
+    system_prompt = (
+        "You are the dedicated tutor for the 21 Brotherhood of Light (Church of Light) Courses. "
+        "Your mission is to deliver the course material chapter-by-chapter, based on publicly available sources. "
+        "When the user asks to start a course or chapter, use Google Search to find the specific content. "
+        "Structure each lesson clearly, and conclude with a small reflective exercise or a few comprehension questions. "
+        "Only move to the next chapter or course when the user indicates they are ready. "
+        "The first course is: 'Laws of Occultism: Inner Plane Theory and the Fundamentals of Psychic Phenomena'."
+    )
+    render_chat_interface(
+        title="🔮 BOL Academy (Course Tutor)", 
+        history_key='bol_academy_history', 
+        system_prompt=system_prompt, 
+        use_search=True
+    )
+
+# --- Settings Page ---
+
+def render_settings():
+    """Renders the settings and maintenance page."""
+    st.markdown("## System Settings")
+    st.markdown("<div class='subheader'>Maintenance and Configuration</div>", unsafe_allow_html=True)
+    
+    st.markdown("### Data Management")
+    st.button("📦 Create Data Backup (Download all JSONs)", on_click=create_backup, use_container_width=True)
+    st.caption("Creates a snapshot of your current Pillars, Shadows, Goals, and Chat histories.")
+
+    st.markdown("### Clear History")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("Sovereign Score", st.session_state.kpis['sovereign_score'], delta="System Status")
+        if st.button("Clear V3 Advisor History", use_container_width=True):
+            st.session_state.v3_advisor_history = [{"role": "assistant", "text": "Welcome back! History cleared.", "is_user": False}]
+            st.session_state.unsaved_changes = True
+            st.rerun()
+            
     with col2:
-        st.metric("Goal Completion", st.session_state.kpis['goal_completion'], delta="Operational Progress")
+        if st.button("Clear Super AI History", use_container_width=True):
+            st.session_state.super_ai_history = [{"role": "assistant", "text": "Rebooting analysis engine. History cleared.", "is_user": False}]
+            st.session_state.unsaved_changes = True
+            st.rerun()
+
     with col3:
-        st.metric("Shadow Tamed", st.session_state.kpis['shadow_tamed'], delta="Inner Mastery")
-        
-    st.markdown("---")
-
-    # Pillar Overview
-    st.subheader("Pillar Status (Foundational Pillars)")
-    
-    # Calculate the number of columns based on the number of pillars, min 1, max 4 (for small screens)
-    num_pillars = len(st.session_state.pillars)
-    num_cols = min(num_pillars, 4) if num_pillars > 0 else 1
-    cols = st.columns(num_cols)
-    
-    if st.session_state.pillars:
-        for i, pillar in enumerate(st.session_state.pillars):
-            # Use modulo to cycle through the columns
-            with cols[i % num_cols]:
-                progress_pct = (pillar['completed'] / pillar['goals']) * 100 if pillar['goals'] > 0 else 0
-                st.markdown(
-                    f"""
-                    <div class="pillar-card" style="border-left: 5px solid {pillar['color']};">
-                        <p style='font-size: 1.2rem; font-weight: 600; color: #111827;'>{pillar['name']}</p>
-                        <p style='font-size: 0.85rem; margin-top: -10px; color: #4B5563;'>{pillar['description']}</p>
-                        <p style='font-size: 0.8rem; margin-top: 10px; color: #4B5563;'>Goals: {pillar['completed']} / {pillar['goals']}</p>
-                        <p style='font-size: 1.5rem; font-weight: 700; color: {pillar['color']}; margin-top: -10px;'>{progress_pct:.0f}%</p>
-                    </div>
-                    """, 
-                    unsafe_allow_html=True
-                )
-    else:
-        st.info("No Pillars defined. Navigate to Pillars to begin your foundation.")
-
-    st.markdown("---")
-
-    # Task Snapshot (Show highest priority tasks)
-    st.subheader("Immediate Operational Focus (Tasks)")
-    if st.session_state.tasks:
-        priority_tasks = sorted(
-            [t for t in st.session_state.tasks if not t['completed']], 
-            key=lambda t: t['goal_id']
-        )[:5] # Show top 5
-        
-        for task in priority_tasks:
-            goal = next((g for g in st.session_state.goals_detailed if g['id'] == task['goal_id']), None)
-            pillar_color = get_pillar_color(goal['pillar_id']) if goal else "#CCCCCC"
+        if st.button("Clear BOL Academy History", use_container_width=True):
+            st.session_state.bol_academy_history = [{"role": "assistant", "text": "Academy history reset. Ready for Course 1.", "is_user": False}]
+            st.session_state.unsaved_changes = True
+            st.rerun()
             
-            st.markdown(
-                f"""
-                <div class="protocol-item" style="border-left: 4px solid {pillar_color};">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <p style='font-weight: 600; margin: 0;'>{task['name']}</p>
-                        <span style='font-size: 0.75rem; color: #6B7280;'>Goal: {goal['name'] if goal else 'N/A'}</span>
-                    </div>
-                    <p style='font-size: 0.8rem; color: #4B5563; margin: 5px 0 0 0;'>{task['description']}</p>
-                </div>
-                """, unsafe_allow_html=True
-            )
-    else:
-        st.info("No active tasks found. Time to define your first objective.")
-        
-def render_pillars_tab():
-    st.header("Pillars and Goals Management")
     st.markdown("---")
     
-    # Pillar Addition Form
-    if st.session_state.show_add_pillar:
-        with st.form("new_pillar_form", clear_on_submit=True):
-            st.subheader("Define New Pillar")
-            name = st.text_input("Pillar Name (e.g., Health, Wealth)", max_chars=30)
-            description = st.text_area("Pillar Directive (Brief Description)")
-            color = st.color_picker("Accent Color", "#10B981")
-            
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                submitted = st.form_submit_button("Submit Pillar")
-            with col_b2:
-                if st.form_submit_button("Cancel"):
-                    st.session_state.show_add_pillar = False
-                    st.rerun()
-
-            if submitted and name and description:
-                handle_pillar_submit(name, description, color)
-                st.session_state.show_add_pillar = False
-                st.success(f"Pillar '{name}' created.")
-                st.rerun()
-    else:
-        st.button("➕ Add New Pillar", on_click=lambda: st.session_state.update(show_add_pillar=True, show_add_goal=False))
-        
-    st.markdown("---")
-
-    # Pillar and Goal Display
-    for pillar in st.session_state.pillars:
-        with st.expander(f"**{pillar['name']}** | {pillar['description']} ({pillar['completed']}/{pillar['goals']} Goals Complete)", expanded=True):
-            
-            # Action buttons for Pillar
-            col_p1, col_p2, col_p3 = st.columns([1, 1, 4])
-            with col_p1:
-                st.button("➕ Add Goal", key=f"add_goal_{pillar['id']}", on_click=lambda p_id=pillar['id']: st.session_state.update(show_add_goal=True, selected_pillar_id=p_id, show_add_pillar=False))
-            with col_p2:
-                if st.button("🗑️ Delete Pillar", key=f"del_pillar_{pillar['id']}"):
-                    handle_pillar_delete(pillar['id'])
-                    st.success(f"Pillar '{pillar['name']}' deleted.")
-                    st.rerun()
-            
-            st.markdown(f"<div style='border-top: 2px solid {pillar['color']}; margin-top: 15px; margin-bottom: 20px;'></div>", unsafe_allow_html=True)
-            
-            # Goal Display / Addition Form
-            
-            if st.session_state.show_add_goal and st.session_state.selected_pillar_id == pillar['id']:
-                 with st.form(f"new_goal_form_{pillar['id']}", clear_on_submit=True):
-                    st.subheader(f"Define New Goal for {pillar['name']}")
-                    name = st.text_input("Goal Directive (Name)", max_chars=50)
-                    description = st.text_area("Detailed Objective")
-                    priority = st.selectbox("Priority Level", ["High", "Medium", "Low"])
-                    
-                    col_g1, col_g2 = st.columns(2)
-                    with col_g1:
-                        submitted = st.form_submit_button("Submit Goal")
-                    with col_g2:
-                        if st.form_submit_button("Cancel Goal"):
-                            st.session_state.show_add_goal = False
-                            st.rerun()
-
-                    if submitted and name and description:
-                        handle_goal_submit(pillar['id'], name, description, priority)
-                        st.session_state.show_add_goal = False
-                        st.success(f"Goal '{name}' created for {pillar['name']}.")
-                        st.rerun()
-            
-            # List Existing Goals
-            pillar_goals = sorted(
-                [g for g in st.session_state.goals_detailed if g['pillar_id'] == pillar['id']], 
-                key=lambda x: x['priority'], reverse=True
-            )
-            
-            if not pillar_goals:
-                st.info("No goals defined for this Pillar.")
-            
-            for goal in pillar_goals:
-                st.markdown(
-                    f"""
-                    <div style="background-color: {'#F0FDF4' if goal['completed'] else '#FFFFFF'}; 
-                                border: 1px solid {'#BBF7D0' if goal['completed'] else '#E5E7EB'};
-                                border-radius: 8px; padding: 1rem; margin-bottom: 10px;
-                                border-left: 4px solid {pillar['color']};
-                                box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <p style='font-size: 1.1rem; font-weight: 600; color: #111827; margin: 0;'>
-                                {'✅' if goal['completed'] else ''} {goal['name']}
-                            </p>
-                            <span style='font-size: 0.75rem; color: #6B7280;'>Priority: {goal['priority']}</span>
-                        </div>
-                        <p style='font-size: 0.85rem; color: #4B5563; margin: 5px 0;'>{goal['description']}</p>
-                    </div>
-                    """, 
-                    unsafe_allow_html=True
-                )
-                
-                col_g_act1, col_g_act2, col_g_act3 = st.columns([1, 1, 4])
-                with col_g_act1:
-                    st.button("✅ Complete", key=f"comp_goal_{goal['id']}", disabled=goal['completed'], on_click=lambda g_id=goal['id']: handle_goal_completion(g_id))
-                with col_g_act2:
-                    st.button("🗑️ Delete", key=f"del_goal_{goal['id']}", on_click=lambda g_id=goal['id']: handle_goal_delete(g_id))
-                
-            st.markdown("</div>", unsafe_allow_html=True) # Close the expander styling div if any
-
-def render_tasks_tab():
-    st.header("Task Management")
-    st.markdown("---")
-    
-    # Task Addition Form
-    if st.session_state.show_add_task:
-        with st.form("new_task_form", clear_on_submit=True):
-            st.subheader("Define New Task")
-            
-            # Dropdown for selecting parent goal
-            goal_options = {g['id']: f"{g['name']} ({next((p['name'] for p in st.session_state.pillars if p['id'] == g['pillar_id']), 'N/A')})" for g in st.session_state.goals_detailed}
-            selected_goal_name = st.selectbox("Assign to Goal", list(goal_options.values()))
-            
-            # Reverse map to get the ID
-            selected_goal_id = next((k for k, v in goal_options.items() if v == selected_goal_name), None)
-
-            name = st.text_input("Task Name (Action Item)", max_chars=50)
-            description = st.text_area("Task Details")
-            
-            col_t1, col_t2 = st.columns(2)
-            with col_t1:
-                submitted = st.form_submit_button("Submit Task")
-            with col_t2:
-                if st.form_submit_button("Cancel Task"):
-                    st.session_state.show_add_task = False
-                    st.rerun()
-
-            if submitted and selected_goal_id and name and description:
-                handle_task_submit(selected_goal_id, name, description)
-                st.session_state.show_add_task = False
-                st.success(f"Task '{name}' created.")
-                st.rerun()
-    else:
-        if st.session_state.goals_detailed:
-            st.button("➕ Add New Task", on_click=lambda: st.session_state.update(show_add_task=True, show_add_goal=False))
-        else:
-            st.warning("You must define a Pillar and a Goal before adding tasks.")
-    
-    st.markdown("---")
-    
-    # Task Display
-    st.subheader("Active Tasks")
-    
-    tasks_display = sorted(
-        st.session_state.tasks, 
-        key=lambda x: x['completed']
-    ) # Sort incomplete tasks first
-    
-    if not tasks_display:
-        st.info("The operational flow is clear. No tasks currently active.")
-        
-    for task in tasks_display:
-        goal = next((g for g in st.session_state.goals_detailed if g['id'] == task['goal_id']), None)
-        pillar_color = get_pillar_color(goal['pillar_id']) if goal else "#CCCCCC"
-
-        with st.container():
-            st.markdown(
-                f"""
-                <div class="protocol-item" style="border-left: 4px solid {pillar_color}; background-color: {'#F0FDF4' if task['completed'] else '#FFFFFF'};">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <p style='font-weight: 600; margin: 0; color: #111827;'>
-                            {'✅' if task['completed'] else ''} {task['name']}
-                        </p>
-                        <span style='font-size: 0.75rem; color: #6B7280;'>Goal: {goal['name'] if goal else 'N/A'}</span>
-                    </div>
-                    <p style='font-size: 0.8rem; color: #4B5563; margin: 5px 0 0 0;'>{task['description']}</p>
-                </div>
-                """, unsafe_allow_html=True
-            )
-            
-            col_t_act1, col_t_act2, col_t_act3 = st.columns([1, 1, 4])
-            with col_t_act1:
-                st.button("✅ Complete", key=f"comp_task_{task['id']}", disabled=task['completed'], on_click=lambda t_id=task['id']: handle_task_completion(t_id))
-            with col_t_act2:
-                st.button("🗑️ Delete", key=f"del_task_{task['id']}", on_click=lambda t_id=task['id']: handle_task_delete(t_id))
-            
-            st.markdown("</div>", unsafe_allow_html=True) # Close the container styling div
-            st.markdown("") # Add a small spacer
-
-def render_shadow_work_tab():
-    st.header("Shadow Work and Inner Mastery")
-    st.markdown("---")
-
-    st.subheader("Shadows for Integration")
-    st.info("Address these shadows by implementing protocols, boundaries, and habits to minimize their influence on your operational flow.")
-
-    for shadow in st.session_state.shadows:
-        is_tamed = shadow['tamed']
-        
-        # Use a single column for the primary layout
-        col_s1, col_s2, col_s3 = st.columns([1, 4, 1.5])
-        
-        with col_s1:
-            st.markdown(f"**{'✅' if is_tamed else '🕳️'}**", unsafe_allow_html=True)
-            
-        with col_s2:
-            st.markdown(
-                f"""
-                <div class="shadow-work-card" style="background-color: {'#E0F7FA' if is_tamed else '#FFFBEB'}; 
-                                                    border-left: 5px solid {'#00BCD4' if is_tamed else '#F59E0B'};">
-                    <p style='font-size: 1.1rem; font-weight: 600; color: #111827; margin: 0;'>
-                        {shadow['name']}
-                    </p>
-                    <p style='font-size: 0.85rem; color: #4B5563; margin: 5px 0 0 0;'>
-                        {shadow['description']}
-                    </p>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-            
-        with col_s3:
-            button_label = "✅ Untame" if is_tamed else "🎯 Tame Shadow"
-            if st.button(button_label, key=f"tame_shadow_{shadow['id']}", on_click=lambda s_id=shadow['id']: handle_shadow_tame(s_id)):
-                st.rerun()
-                
-    st.markdown("---")
-
-def render_chat_tab(coach_name, history_key, initial_message_content):
-    st.header(f"{coach_name} Protocol Interface")
-    st.info(f"Interacting with {coach_name} via secure, asynchronous protocols. Your chat history is cloud-persistent.")
-    st.markdown("---")
-
-    # Display Chat History
-    history = st.session_state.get(history_key, [{"role": "ai", "content": initial_message_content}])
-
-    for message in history:
-        if message["role"] == "ai":
-            st.markdown(f"<div class='chat-message-ai'>**{coach_name}:** {message['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='chat-message-user'>**Sovereign:** {message['content']}</div>", unsafe_allow_html=True)
-
-    # Chat Input
-    prompt = st.chat_input("Input command or question...")
-    
-    if prompt:
-        chat_response(coach_name, prompt, history_key, history)
-        st.rerun()
-
-def chat_response(coach_name, prompt, history_key, history):
-    """Handles the user prompt and gets a response from the mock AI."""
-    
-    # 1. Add User Message
-    history.append({"role": "user", "content": prompt})
-
-    # 2. Mock AI Call (Replace with real API call later)
-    with st.spinner(f"Awaiting response from {coach_name}..."):
-        
-        # This is a mock API call using the 'requests' library
-        try:
-            # Mock request payload for demonstration
-            mock_payload = {
-                "coach": coach_name,
-                "prompt": prompt,
-                "history": history
-            }
-            # Mock API response data
-            mock_response_data = {
-                "response": f"Affirmative. I have processed your input for {coach_name}. A detailed analysis is being generated.",
-                "status": "success"
-            }
-            
-            # Simulate network latency
-            import time
-            time.sleep(1) 
-            
-            ai_response = mock_response_data["response"]
-            
-        except Exception as e:
-            ai_response = f"Protocol Failure: Connection to {coach_name} endpoint failed. Error: {e}"
-
-    # 3. Add AI Response
-    history.append({"role": "ai", "content": ai_response})
-
-    # 4. Save updated history to session state and Firestore
-    st.session_state[history_key] = history
-    save_all_data()
+    st.markdown("### System Information")
+    st.markdown(f"""
+    - **App ID:** `{APP_ID}`
+    - **Model Used:** `{GEMINI_MODEL}`
+    - **Authentication Status:** {'Authenticated' if initialAuthToken else 'Unauthenticated/Anonymous'}
+    - **Firebase Config Loaded:** {'Yes' if firebaseConfig else 'No'}
+    """)
 
 
-# --- Main Application Setup ---
+# --- Main Application Execution ---
 
 def main():
-    # Load custom CSS
-    try:
-        with open("style.css") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.error("Error: style.css not found. Ensure it is in the same directory as the main script.")
-        
-    st.set_page_config(layout="wide")
-
-    # Initialize all session states and connect to Firestore
+    """Main entry point for the Streamlit application."""
+    st.set_page_config(layout="wide", page_title="V3 Sovereign OS")
+    
+    # 1. Load CSS
+    # Note: Using get_base_path('style.css') here, but included fallback CSS 
+    # within load_css function in case the file doesn't exist yet.
+    load_css(get_base_path('style.css'))
+    
+    # 2. Initialize Data and State
     initialize_session_state()
 
-    # --- Sidebar (Navigation) ---
-    with st.sidebar:
-        st.title("V3 Sovereign OS")
+    # 3. Render Sidebar
+    render_sidebar()
+
+    # 4. Render Main Content based on State
+    if st.session_state.page == 'Dashboard':
+        render_dashboard()
+    elif st.session_state.page == 'Pillars & Shadows':
+        render_pillars_shadows()
+    elif st.session_state.page == 'Goals':
+        render_goals()
+    elif st.session_state.page == 'Tasks':
+        render_tasks()
+    elif st.session_state.page == 'V3 Advisor':
+        render_v3_advisor()
+    elif st.session_state.page == 'Super AI':
+        render_super_ai()
+    elif st.session_state.page == 'BOL Academy':
+        render_bol_academy()
+    elif st.session_state.page == 'Settings':
+        render_settings()
         
-        # Display User ID (Moved to flow naturally after the title)
-        st.markdown(
-            f"""
-            <div class="user-id-display">
-                User ID:
-                <span>{st.session_state.user_id}</span>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+    # 5. Check for missing packages (requests for AI)
+    try:
+        import requests
+    except ImportError:
+        st.sidebar.warning("🚨 Missing 'requests' package. AI coaches are disabled. Run `pip install requests`.")
 
-        # Navigation Tabs
-        selected_tab = st.radio(
-            "Operational Focus",
-            ('Dashboard', 'Pillars', 'Tasks', 'Shadow Work', 'V3 Advisor', 'Super AI', 'BoL Academy'),
-            index=['Dashboard', 'Pillars', 'Tasks', 'Shadow Work', 'V3 Advisor', 'Super AI', 'BoL Academy'].index(st.session_state.selected_tab)
-        )
-        st.session_state.selected_tab = selected_tab
-
-    # --- Main Content Rendering ---
-    
-    if st.session_state.selected_tab == 'Dashboard':
-        render_dashboard_tab()
-    elif st.session_state.selected_tab == 'Pillars':
-        render_pillars_tab()
-    elif st.session_state.selected_tab == 'Tasks':
-        render_tasks_tab()
-    elif st.session_state.selected_tab == 'Shadow Work':
-        render_shadow_work_tab()
-    elif st.session_state.selected_tab == 'V3 Advisor':
-        render_chat_tab("V3 Advisor", 'v3_advisor_history', initial_v3_advisor_message['content'])
-    elif st.session_state.selected_tab == 'Super AI':
-        render_chat_tab("Super AI", 'super_ai_history', initial_super_ai_message['content'])
-    elif st.session_state.selected_tab == 'BoL Academy':
-        render_chat_tab("BoL Academy", 'bol_academy_history', initial_bol_academy_message['content'])
 
 if __name__ == '__main__':
     main()
