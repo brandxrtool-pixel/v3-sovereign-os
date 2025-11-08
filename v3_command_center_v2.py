@@ -1,6 +1,7 @@
 # V3 Sovereign OS - Command Center
 # Streamlit application for personal development, structured by Pillars and Shadows.
 # MODIFIED FOR LOCAL EXECUTION (Reads API Key from st.secrets)
+# --- NOW INCLUDES CHROMA DB CONNECTION & RAG CHAT INTERFACE ---
 
 import streamlit as st
 import json
@@ -10,7 +11,12 @@ import base64
 from datetime import datetime
 import asyncio
 import requests # Added requests for API calls
+import re # Added for text chunking
 from typing import List, Dict, Any, Optional
+
+# --- ChromaDB Import ---
+# Make sure to add 'chromadb' to your requirements.txt file!
+import chromadb
 
 # --- Configuration ---
 # Set the model name for text generation tasks
@@ -56,6 +62,46 @@ try:
         f.write(".st-emotion-cache-12fmj8x { padding-top: 2rem; }")
 except Exception:
     pass
+
+# --- ChromaDB Client Setup ---
+
+@st.cache_resource
+def setup_chroma_client(_dummy_param=None):
+    """
+    Initializes and returns a ChromaDB client connected to the cloud.
+    Uses st.secrets for credentials.
+    """
+    try:
+        # Load all connection details from secrets
+        api_key = st.secrets["CHROMA_API_KEY"]
+        tenant = st.secrets["CHROMA_TENANT"]
+        database = st.secrets["CHROMA_DATABASE"]
+        
+        st.info(f"Connecting to ChromaDB: {database}")
+        
+    except KeyError as e:
+        st.error(f"Error: Chroma key '{e.args[0]}' not found in st.secrets.")
+        st.error("Please add CHROMA_API_KEY, CHROMA_TENANT, and CHROMA_DATABASE to your .streamlit/secrets.toml file.")
+        return None
+        
+    try:
+        # Connect to ChromaDB Cloud using CloudClient
+        client = chromadb.CloudClient(
+            tenant=tenant,
+            database=database,
+            api_key=api_key 
+        )
+        
+        # Test connection by listing collections
+        collections = client.list_collections()
+        st.success(f"✅ Successfully connected to Chroma database: {database}")
+        st.info(f"Found {len(collections)} collections")
+        return client
+        
+    except Exception as e:
+        st.error(f"Error connecting to ChromaDB: {e}")
+        st.info("The app will continue without ChromaDB functionality. You can still use other features.")
+        return None
 
 # --- Persistence Functions (Simulated File I/O) ---
 
@@ -124,6 +170,14 @@ def save_all_data():
             json.dump({'history': st.session_state.super_ai_history}, f, indent=4)
         with open(get_base_path('bol_academy_history.json'), 'w') as f:
             json.dump({'history': st.session_state.bol_academy_history}, f, indent=4)
+        with open(get_base_path('business_coach_history.json'), 'w') as f:
+            json.dump({'history': st.session_state.business_coach_history}, f, indent=4)
+        with open(get_base_path('health_coach_history.json'), 'w') as f:
+            json.dump({'history': st.session_state.health_coach_history}, f, indent=4)
+        # 1. (TEMPLATE) Save history for the new coach
+        with open(get_base_path('energy_somatic_history.json'), 'w') as f:
+            json.dump({'history': st.session_state.energy_somatic_history}, f, indent=4)
+
 
         st.toast("✅ All data saved successfully!", icon="💾")
         st.session_state.unsaved_changes = False
@@ -163,7 +217,6 @@ def initialize_session_state():
         st.session_state.user_input = ""
 
         # 3. Chat Histories
-        # Load or initialize V3 Advisor history
         v3_advisor_default = [{
             "role": "model",
             "text": "Welcome to the V3 Command Center. I am your V3 Advisor. How can I assist you in optimizing your day or refining your Pillars and Shadows today?",
@@ -171,7 +224,6 @@ def initialize_session_state():
         }]
         st.session_state.v3_advisor_history = load_data('v3_advisor_history.json', {'history': v3_advisor_default})['history']
 
-        # Load or initialize Super AI history
         super_ai_default = [{
             "role": "model",
             "text": "Greetings. I am the Super AI. Submit any complex, unstructured data or queries, and I will analyze them through the lens of your Sovereign OS structure.",
@@ -179,7 +231,6 @@ def initialize_session_state():
         }]
         st.session_state.super_ai_history = load_data('super_ai_history.json', {'history': super_ai_default})['history']
 
-        # Load or initialize BOL Academy history
         bol_academy_default = [{
             "role": "model",
             "text": "Welcome to the BOL Academy. I am your dedicated tutor for the 21 Brotherhood of Light Courses. When you are ready, please tell me to begin **Course 1: Laws of Occultism: Inner Plane Theory and the Fundamentals of Psychic Phenomena**.",
@@ -187,11 +238,37 @@ def initialize_session_state():
         }]
         st.session_state.bol_academy_history = load_data('bol_academy_history.json', {'history': bol_academy_default})['history']
 
+        business_coach_default = [{
+            "role": "model",
+            "text": "Welcome to the V3 Business Coach. I am here to answer questions based on the knowledge you provide. Please go to the 'Ingest Data' page to upload your business notes before we begin.",
+            "is_user": False
+        }]
+        st.session_state.business_coach_history = load_data('business_coach_history.json', {'history': business_coach_default})['history']
+        
+        health_coach_default = [{
+            "role": "model",
+            "text": "Welcome to the V3 Health Coach. I am ready to review your 'Hardware' protocols. Please go to the 'Ingest Data' page to upload your health and somatic notes.",
+            "is_user": False
+        }]
+        st.session_state.health_coach_history = load_data('health_coach_history.json', {'history': health_coach_default})['history']
+
+        # 2. (TEMPLATE) Initialize history for the new coach
+        energy_somatic_default = [{
+            "role": "model",
+            "text": "Welcome to the Energy & Somatic Coach. I am here to help you regulate your nervous system and manage your 'Hardware' protocols. Please feed my knowledge base via the 'Ingest Data' page.",
+            "is_user": False
+        }]
+        st.session_state.energy_somatic_history = load_data('energy_somatic_history.json', {'history': energy_somatic_default})['history']
+
+
         # 4. Auth/Database (Placeholder for Firestore)
         st.session_state.db = None
         st.session_state.auth = None
-        # Placeholder for unauthenticated environment or based on auth token
-        st.session_state.user_id = APP_ID # Use APP_ID as default user ID
+        st.session_state.user_id = APP_ID 
+
+        # 5. ChromaDB Client
+        st.session_state.chroma_client = setup_chroma_client()
+
 
 # --- Styling and UI Functions ---
 
@@ -249,11 +326,23 @@ def render_sidebar():
     st.sidebar.button('🛡️ Pillars & Shadows', on_click=set_page, args=('Pillars & Shadows',), use_container_width=True)
     st.sidebar.button('🎯 Goals', on_click=set_page, args=('Goals',), use_container_width=True)
     st.sidebar.button('📋 Tasks', on_click=set_page, args=('Tasks',), use_container_width=True)
+    
     st.sidebar.markdown('---')
-    st.sidebar.button('💬 V3 Advisor', on_click=set_page, args=('V3 Advisor',), use_container_width=True)
-    st.sidebar.button('🧬 Super AI', on_click=set_page, args=('Super AI',), use_container_width=True)
-    st.sidebar.button('🔮 BOL Academy', on_click=set_page, args=('BOL Academy',), use_container_width=True)
+    st.sidebar.markdown("<div class='subheader' style='margin:0; padding-left: 5px;'>AI ADVISORS</div>", unsafe_allow_html=True)
+    st.sidebar.button('💬 V3 Advisor (General)', on_click=set_page, args=('V3 Advisor',), use_container_width=True)
+    st.sidebar.button('🧬 Super AI (Analysis)', on_click=set_page, args=('Super AI',), use_container_width=True)
+    st.sidebar.button('🔮 BOL Academy (Tutor)', on_click=set_page, args=('BOL Academy',), use_container_width=True)
+
     st.sidebar.markdown('---')
+    st.sidebar.markdown("<div class='subheader' style='margin:0; padding-left: 5px;'>PILLAR COACHES</div>", unsafe_allow_html=True)
+    st.sidebar.button('💼 Business Coach (Hybrid)', on_click=set_page, args=('Business Coach',), use_container_width=True)
+    st.sidebar.button('💪 Health Coach (Hybrid)', on_click=set_page, args=('Health Coach',), use_container_width=True)
+    # 3. (TEMPLATE) Add a button for the new coach
+    st.sidebar.button('⚡ Energy & Somatic Coach (Hybrid)', on_click=set_page, args=('Energy & Somatic Coach',), use_container_width=True)
+
+
+    st.sidebar.markdown('---')
+    st.sidebar.button('💾 Ingest Data', on_click=set_page, args=('Ingest Data',), use_container_width=True)
     st.sidebar.button('⚙️ Settings', on_click=set_page, args=('Settings',), use_container_width=True)
 
     # Save Control
@@ -265,7 +354,6 @@ def render_sidebar():
     st.sidebar.button(save_label, on_click=save_all_data, use_container_width=True, key="save_button")
     st.sidebar.markdown("</div>", unsafe_allow_html=True)
     
-    # User ID placeholder (Mandatory for multi-user apps)
     st.sidebar.markdown(f"<div class='user-id-display'>User ID: <span>{st.session_state.user_id}</span></div>", unsafe_allow_html=True)
 
 
@@ -281,16 +369,12 @@ def render_dashboard():
     goals = st.session_state.goals_data['goals']
 
     # --- 1. Top Metrics (Overall Health) ---
-
-    # Calculate Goal Progress (Handle empty list safely)
     goal_progress = 0
     if goals:
-        # Filter for goals that have a progress key and are numbers
         valid_progresses = [g.get('progress', 0) for g in goals if isinstance(g.get('progress'), (int, float))]
         if valid_progresses:
             goal_progress = sum(valid_progresses) / len(valid_progresses)
 
-    # Calculate Sovereign Score (Average of all Pillar scores)
     sovereign_score = sum([p['score'] for p in pillars]) / len(pillars) if pillars else 0
 
     col1, col2, col3 = st.columns(3)
@@ -312,7 +396,6 @@ def render_dashboard():
         """, unsafe_allow_html=True)
 
     with col3:
-        # Calculate Shadow Status (Average 'score', which is actually 'tamed' percentage)
         shadow_progress = sum([s['score'] for s in shadows]) / len(shadows) if shadows else 0
         st.markdown(f"""
         <div class='metric-card'>
@@ -326,19 +409,23 @@ def render_dashboard():
     # --- 2. Pillar Status ---
     st.markdown("### 🛡️ Pillar Status")
     
-    pillar_cols = st.columns(len(pillars))
-    for i, p in enumerate(pillars):
-        with pillar_cols[i]:
-            st.markdown(f"""
-            <div class='pillar-card'>
-                <div class='pillar-title'>{p['name']}</div>
-                <div class='pillar-focus'>{p['focus']}</div>
-                <div class='pillar-progress'>
-                    <progress class='pillar-progress-bar' value='{p['score']}' max='100'></progress>
-                    <span class='pillar-score'>{p['score']}%</span>
+    if pillars:
+        pillar_cols = st.columns(len(pillars))
+        for i, p in enumerate(pillars):
+            with pillar_cols[i]:
+                st.markdown(f"""
+                <div class='pillar-card'>
+                    <div class='pillar-title'>{p['name']}</div>
+                    <div class='pillar-focus'>{p['focus']}</div>
+                    <div class='pillar-progress'>
+                        <progress class='pillar-progress-bar' value='{p['score']}' max='100'></progress>
+                        <span class='pillar-score'>{p['score']}%</span>
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No Pillars defined. Go to 'Pillars & Shadows' to set them up.")
+
 
     st.markdown("---")
 
@@ -352,16 +439,21 @@ def render_dashboard():
         if not active_goals:
             st.info("All goals completed! Time to set new targets.")
         else:
-            goal_cols = st.columns(min(len(active_goals), 3))
-            for i, g in enumerate(active_goals[:3]):
-                with goal_cols[i % 3]:
-                    st.markdown(f"""
-                    <div class='goal-card'>
-                        <div class='goal-title'>{g['name']}</div>
-                        <div class='goal-pillar'><span class='pillar-tag-small'>{g['pillar']}</span></div>
-                        <div class='goal-progress-display'>{g['progress']}% Complete</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+            goal_cols_count = min(len(active_goals), 3)
+            if goal_cols_count > 0:
+                goal_cols = st.columns(goal_cols_count)
+                for i, g in enumerate(active_goals[:goal_cols_count]):
+                    with goal_cols[i % goal_cols_count]:
+                        st.markdown(f"""
+                        <div class='goal-card'>
+                            <div class='goal-title'>{g['name']}</div>
+                            <div class='goal-pillar'><span class='pillar-tag-small'>{g['pillar']}</span></div>
+                            <div class='goal-progress-display'>{g['progress']}% Complete</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.info("All active goals are displayed.")
+
 
 def render_pillars_shadows():
     """Pillars and Shadows management page."""
@@ -370,40 +462,48 @@ def render_pillars_shadows():
     st.markdown("### 🛡️ Pillars: Areas of Focus (Max 100 Score)")
     st.markdown("<div class='subheader'>Use the sliders to calibrate your self-assessed current performance.</div>", unsafe_allow_html=True)
 
-    # Render Pillars
-    cols = st.columns(4)
-    for i, p in enumerate(st.session_state.pillars_data['pillars']):
-        with cols[i]:
-            st.subheader(p['name'])
-            new_score = st.slider('Current Score', 0, 100, p['score'], key=f"pillar_score_{p['name']}")
-            if new_score != p['score']:
-                st.session_state.pillars_data['pillars'][i]['score'] = new_score
-                st.session_state.unsaved_changes = True
+    if st.session_state.pillars_data['pillars']:
+        cols = st.columns(len(st.session_state.pillars_data['pillars']))
+        for i, p in enumerate(st.session_state.pillars_data['pillars']):
+            with cols[i]:
+                st.subheader(p['name'])
+                new_score = st.slider('Current Score', 0, 100, p['score'], key=f"pillar_score_{p['name']}")
+                if new_score != p['score']:
+                    st.session_state.pillars_data['pillars'][i]['score'] = new_score
+                    st.session_state.unsaved_changes = True
 
-            new_focus = st.text_area('Core Focus', p['focus'], key=f"pillar_focus_{p['name']}")
-            if new_focus != p['focus']:
-                st.session_state.pillars_data['pillars'][i]['focus'] = new_focus
-                st.session_state.unsaved_changes = True
+                new_focus = st.text_area('Core Focus', p['focus'], key=f"pillar_focus_{p['name']}")
+                if new_focus != p['focus']:
+                    st.session_state.pillars_data['pillars'][i]['focus'] = new_focus
+                    st.session_state.unsaved_changes = True
+    else:
+        st.warning("No Pillars found. Add default pillars?") # Placeholder for future "add pillar" logic
 
     st.markdown("---")
     
-    # Render Shadows
     st.markdown("### 🌑 Shadows: Limiting Behaviors (Score is Taming Progress)")
     st.markdown("<div class='subheader'>Assess your control over limiting traits. 100% means fully tamed.</div>", unsafe_allow_html=True)
     
-    shadow_cols = st.columns(2)
-    for i, s in enumerate(st.session_state.shadows_data['shadows']):
-        with shadow_cols[i]:
-            st.subheader(s['name'])
-            new_score = st.slider('Taming Progress (%)', 0, 100, s['score'], key=f"shadow_score_{s['name']}")
-            if new_score != s['score']:
-                st.session_state.shadows_data['shadows'][i]['score'] = new_score
-                st.session_state.unsaved_changes = True
+    if st.session_state.shadows_data['shadows']:
+        shadow_cols_count = len(st.session_state.shadows_data['shadows'])
+        if shadow_cols_count > 0:
+            shadow_cols = st.columns(shadow_cols_count)
+            for i, s in enumerate(st.session_state.shadows_data['shadows']):
+                with shadow_cols[i]:
+                    st.subheader(s['name'])
+                    new_score = st.slider('Taming Progress (%)', 0, 100, s['score'], key=f"shadow_score_{s['name']}")
+                    if new_score != s['score']:
+                        st.session_state.shadows_data['shadows'][i]['score'] = new_score
+                        st.session_state.unsaved_changes = True
 
-            new_focus = st.text_area('Integration Focus', s['focus'], key=f"shadow_focus_{s['name']}")
-            if new_focus != s['focus']:
-                st.session_state.shadows_data['shadows'][i]['focus'] = new_focus
-                st.session_state.unsaved_changes = True
+                    new_focus = st.text_area('Integration Focus', s['focus'], key=f"shadow_focus_{s['name']}")
+                    if new_focus != s['focus']:
+                        st.session_state.shadows_data['shadows'][i]['focus'] = new_focus
+                        st.session_state.unsaved_changes = True
+        else:
+            st.warning("No Shadows found.") # Placeholder for future "add shadow" logic
+    else:
+         st.warning("No Shadows found.") # Placeholder for future "add shadow" logic
 
 def render_goals():
     """Goals management page."""
@@ -411,6 +511,9 @@ def render_goals():
     st.markdown("<div class='subheader'>Set, track, and manage your high-level outcomes.</div>", unsafe_allow_html=True)
 
     pillars = [p['name'] for p in st.session_state.pillars_data['pillars']]
+    if not pillars:
+        st.error("No Pillars defined. You must define Pillars before you can add Goals.")
+        return
 
     def add_new_goal(name, pillar, deadline):
         """Adds a new goal to the session state."""
@@ -430,7 +533,6 @@ def render_goals():
         with st.form("new_goal_form", clear_on_submit=True):
             goal_name = st.text_input("Goal Name (e.g., Launch SaaS product in 6 months)")
             goal_pillar = st.selectbox("Linked Pillar", pillars)
-            # Ensure value defaults to today if not provided
             default_date = datetime.now().date()
             goal_deadline = st.date_input("Target Deadline", min_value=default_date, value=default_date)
             submitted = st.form_submit_button("Create Goal")
@@ -449,7 +551,6 @@ def render_goals():
         st.info("No goals defined yet. Use the form above to get started.")
         return
 
-    # Sort goals: active first, then by progress
     goals.sort(key=lambda g: (g.get('progress', 0) == 100, g.get('progress', 0)))
 
     for i, g in enumerate(goals):
@@ -460,7 +561,6 @@ def render_goals():
             st.progress(g.get('progress', 0) / 100)
         
         with col2:
-            # Slider to update progress
             new_progress = st.slider('Progress (%)', 0, 100, g.get('progress', 0), key=f"goal_progress_{g['id']}")
             if new_progress != g.get('progress', 0):
                 st.session_state.goals_data['goals'][i]['progress'] = new_progress
@@ -469,9 +569,7 @@ def render_goals():
             st.caption(f"Deadline: {g.get('deadline', 'N/A')}")
             
         with col3:
-            # Delete button
             if st.button("🗑️", key=f"delete_goal_{g['id']}"):
-                # Use st.session_state.goals_data['goals'].remove(g) if possible, or pop by index
                 st.session_state.goals_data['goals'].pop(i)
                 st.session_state.unsaved_changes = True
                 st.rerun()
@@ -484,6 +582,9 @@ def render_tasks():
     st.markdown("<div class='subheader'>Actionable steps linked to your Pillars.</div>", unsafe_allow_html=True)
 
     pillars = [p['name'] for p in st.session_state.pillars_data['pillars']]
+    if not pillars:
+        st.error("No Pillars defined. You must define Pillars before you can add Tasks.")
+        return
     
     # --- Helper to Update Pillar Score on Completion ---
     def update_pillar_score(pillar_name: str, priority: str):
@@ -491,11 +592,10 @@ def render_tasks():
         boost_map = {'P1': 3, 'P2': 2, 'P3': 1}
         boost = boost_map.get(priority, 0)
 
-        for p in st.session_state.pillars_data['pillars']:
+        for p_idx, p in enumerate(st.session_state.pillars_data['pillars']):
             if p['name'] == pillar_name:
-                # Apply boost, ensuring score doesn't exceed 100
                 new_score = min(100, p['score'] + boost)
-                p['score'] = new_score
+                st.session_state.pillars_data['pillars'][p_idx]['score'] = new_score
                 st.session_state.unsaved_changes = True
                 st.toast(f"🎉 Task Completed! +{boost} points added to {pillar_name} Pillar.", icon="🚀")
                 return
@@ -519,7 +619,7 @@ def render_tasks():
                     'completed': False
                 })
                 st.session_state.unsaved_changes = True
-                st.rerun() # Rerun to refresh the list
+                st.rerun() 
 
     st.markdown("---")
 
@@ -531,11 +631,9 @@ def render_tasks():
         st.info("No active tasks. Add a task to initiate your daily flow.")
         return
     
-    # Separate and sort tasks
     active_tasks = [t for t in tasks if not t.get('completed')]
     completed_tasks = [t for t in tasks if t.get('completed')]
     
-    # Sort active tasks by priority (P1 first)
     active_tasks.sort(key=lambda t: t['priority'])
 
     st.markdown("#### Active Tasks")
@@ -548,13 +646,10 @@ def render_tasks():
         
         col1, col2, col3 = st.columns([0.1, 0.7, 0.2])
         
-        # Completion Checkbox
         with col1:
-            # We use a state check to see if the task has already been completed in the main list
             initial_value = task.get('completed', False)
             is_completed_check = col1.checkbox("", key=f"checkbox_{key_prefix}", value=initial_value)
             
-        # Task Details
         with col2:
             task_style = 'task-completed-label' if task.get('completed') else 'task-pending'
             task_name_display = task['name']
@@ -570,24 +665,20 @@ def render_tasks():
             """, unsafe_allow_html=True)
             st.caption(f"Due: {task['due']}")
 
-        # Delete Button
         with col3:
             if st.button("🗑️", key=f"delete_{key_prefix}"):
-                # Find and delete the task from the main list
                 task_index = next((j for j, t in enumerate(st.session_state.tasks_data['tasks']) if t['id'] == task['id']), None)
                 if task_index is not None:
                     st.session_state.tasks_data['tasks'].pop(task_index)
                     st.session_state.unsaved_changes = True
                     st.rerun()
 
-        # Handle Completion Logic (Only if the checkbox state changes from False to True)
         if is_completed_check and not initial_value:
-            # Find and update the original task in the main list
-            for t in st.session_state.tasks_data['tasks']:
+            for t_idx, t in enumerate(st.session_state.tasks_data['tasks']):
                 if t['id'] == task['id']:
-                    t['completed'] = True
+                    st.session_state.tasks_data['tasks'][t_idx]['completed'] = True
                     update_pillar_score(t['pillar'], t['priority'])
-                    st.rerun() # Rerun to move the task to the completed section
+                    st.rerun() 
 
     st.markdown("---")
     st.markdown("#### Completed Tasks")
@@ -596,8 +687,102 @@ def render_tasks():
         st.caption("No tasks completed yet.")
     else:
         for task in completed_tasks:
-            # Display using the class that applies the strikethrough
             st.markdown(f"<div class='task-completed-label'>✅ {task['name']} <span class='pillar-tag-small'>{task['pillar']}</span></div>", unsafe_allow_html=True)
+
+# --- NEW DATA INGESTION PAGE ---
+
+def render_ingest_data():
+    """Renders the data ingestion page for ChromaDB."""
+    st.markdown("## 💾 Ingest Data into Vector Store")
+    st.markdown("<div class='subheader'>Add knowledge to your Pillar Coaches.</div>", unsafe_allow_html=True)
+    
+    if not st.session_state.chroma_client:
+        st.error("ChromaDB connection failed. Please check your secrets and restart.")
+        return
+
+    client = st.session_state.chroma_client
+
+    # --- Collection Management ---
+    st.markdown("### Manage Collections")
+    
+    try:
+        collections = client.list_collections()
+        if collections:
+            st.markdown("Existing Collections:")
+            # Handle potential for many collections gracefully
+            num_cols = min(len(collections), 4) # Max 4 columns
+            cols = st.columns(num_cols)
+            for i, col in enumerate(collections):
+                with cols[i % num_cols]:
+                    st.info(f"**{col.name}**\n\n`{col.count()} items`")
+        else:
+            st.info("No collections found in this database yet.")
+            
+    except Exception as e:
+        st.error(f"Error listing collections: {e}")
+
+    st.markdown("---")
+    
+    # --- Ingestion Form ---
+    st.markdown("### Add New Knowledge")
+    with st.form("ingest_form"):
+        collection_name = st.text_input("Collection Name (e.g., 'business_coach_notes' or 'health_coach_notes')", "business_coach_notes")
+        
+        notes_text = st.text_area("Paste Your Notes Here", height=300, 
+                                  placeholder="Paste your notes here. Separate thoughts or paragraphs with a double newline (Enter key twice) for best results.")
+        
+        submitted = st.form_submit_button("Ingest Notes")
+        
+        if submitted:
+            if not collection_name:
+                st.error("Collection Name is required.")
+                return
+            if not notes_text:
+                st.error("Notes text is required.")
+                return
+
+            with st.spinner(f"Ingesting data into '{collection_name}'..."):
+                try:
+                    # 1. Get or create collection
+                    collection = client.get_or_create_collection(name=collection_name)
+                    
+                    # 2. Chunk text (split by double newline)
+                    chunks = re.split(r'\n\s*\n', notes_text.strip())
+                    chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
+                    
+                    if not chunks:
+                        st.error("No valid text chunks found. Ensure you are using double newlines to separate paragraphs.")
+                        return
+
+                    # 3. Prepare data for upload
+                    documents = []
+                    metadatas = []
+                    ids = []
+                    
+                    # Get current count to offset IDs
+                    base_id = collection.count()
+                    
+                    for i, chunk in enumerate(chunks):
+                        documents.append(chunk)
+                        metadatas.append({"source": "streamlit_ingest", "chunk_num": i})
+                        # Create a unique ID
+                        ids.append(f"doc_{base_id + i}_{time.time_ns()}")
+
+                    # 4. Add to collection
+                    collection.add(
+                        documents=documents,
+                        metadatas=metadatas,
+                        ids=ids
+                    )
+                    
+                    st.success(f"--- SUCCESS! ---")
+                    st.success(f"Added {len(documents)} new documents to the '{collection_name}' collection.")
+                    st.success(f"Total items in collection: {collection.count()}.")
+                    st.info("You can now chat with the corresponding coach!")
+
+                except Exception as e:
+                    st.error(f"Error during ingestion: {e}")
+                    st.error("This may be due to exceeding the free-tier quota for your vector database.")
 
 
 # --- AI Coach Functions ---
@@ -613,28 +798,20 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
     """
     
     # --- MODIFICATION FOR LOCAL RUN ---
-    # Retrieve API key from Streamlit secrets
     try:
-        # st.secrets is the standard way to access secrets in Streamlit
         apiKey = st.secrets["GEMINI_API_KEY"]
     except (KeyError, FileNotFoundError):
-        # This error will be shown if .streamlit/secrets.toml is missing or the key isn't set
         return {"text": "Error: `GEMINI_API_KEY` not found. Please create a file named `.streamlit/secrets.toml` in your app's root directory and add `GEMINI_API_KEY = \"YOUR_API_KEY_HERE\"`.", "sources": []}
     except Exception as e:
-         # Catch other potential startup errors with secrets
          return {"text": f"Error loading Streamlit secrets: {e}", "sources": []}
     
     # --- END MODIFICATION ---
 
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={apiKey}"
 
-    # Format history for API payload
     contents = []
     for message in history:
-        # The role must be 'user' or 'model' for the API
         role = "user" if message.get('is_user') else "model"
-        
-        # Ensure 'text' part exists, handle potential missing key from flawed history data
         message_text = message.get('text', 'Placeholder for missing text.')
         
         contents.append({
@@ -642,39 +819,33 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
             "parts": [{"text": message_text}]
         })
 
-    # Prepare the payload with the full history
     payload = {
         "contents": contents,
         "systemInstruction": {"parts": [{"text": system_prompt}]}
     }
 
-    # Add tools if grounding is required
     if use_search:
         payload["tools"] = [{"google_search": {}}]
 
-    # Implement exponential backoff for robustness
     for attempt in range(4): # up to 4 attempts
         try:
-            # Use requests.post synchronously within a thread
             response = await asyncio.to_thread(
                 lambda: requests.post(
                     apiUrl, 
                     headers={'Content-Type': 'application/json'}, 
                     data=json.dumps(payload),
-                    timeout=30 # Add timeout for robustness
+                    timeout=30 
                 )
             )
-            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+            response.raise_for_status() 
             
             result = response.json()
             candidate = result.get('candidates', [{}])[0]
             
-            # Successful response processing
             if candidate and candidate.get('content', {}).get('parts', [{}])[0].get('text'):
                 text = candidate['content']['parts'][0]['text']
                 sources = []
                 
-                # Append sources if search grounding was used
                 grounding_metadata = candidate.get('groundingMetadata')
                 if use_search and grounding_metadata and grounding_metadata.get('groundingAttributions'):
                     sources = []
@@ -689,25 +860,19 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
                 
                 return {"text": text, "sources": sources}
             else:
-                # API responded successfully, but returned no text candidate
                 return {"text": "Error: Could not retrieve a valid text response from the AI model.", "sources": []}
 
         except requests.exceptions.RequestException as e:
             if attempt < 3:
                 delay = 2 ** attempt
-                # Log the retry attempt silently (no print/st.error)
                 await asyncio.sleep(delay)
             else:
-                # Final attempt failed
-                # MODIFIED Error Message
                 error_text = f"Error: Failed to connect to AI service after multiple retries (Status: {e}). **This often indicates your GEMINI_API_KEY in secrets.toml is invalid, expired, or has insufficient permissions.**"
                 return {"text": error_text, "sources": []}
         except Exception as e:
-            # Unexpected JSON or other error
             error_text = f"An unexpected error occurred during AI call processing: {e}"
             return {"text": error_text, "sources": []}
 
-    # Should not be reached, but as a final safety net
     return {"text": "Error: Maximum retry attempts reached.", "sources": []}
 
 
@@ -715,9 +880,7 @@ async def call_gemini_api(history: List[Dict[str, Any]], system_prompt: str, use
 def run_async_ai_call(history: List[Dict[str, Any]], system_prompt: str, use_search: bool = False) -> Dict[str, Any]:
     """Wrapper to run the async API call and return a structured dictionary."""
     
-    # Run the async function using asyncio.run
     try:
-        # Get or create the event loop
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -727,7 +890,6 @@ def run_async_ai_call(history: List[Dict[str, Any]], system_prompt: str, use_sea
         response_dict = loop.run_until_complete(call_gemini_api(history, system_prompt, use_search))
         return response_dict
     except Exception as e:
-        # Fallback error return
         return {"text": f"Error executing async call wrapper: {e}", "sources": []}
 
 # Standard chat interface renderer
@@ -736,7 +898,6 @@ def render_chat_interface(title: str, history_key: str, system_prompt: str, use_
     st.markdown(f"## {title}")
     st.markdown("<div class='subheader'>Engage the Sovereign AI interface.</div>", unsafe_allow_html=True)
 
-    # Use the specific history key from session state
     history = st.session_state[history_key]
 
     # --- Display Chat History ---
@@ -744,9 +905,7 @@ def render_chat_interface(title: str, history_key: str, system_prompt: str, use_
         for message in history:
             role = "user" if message.get('is_user') else "assistant"
             
-            # The role variable is used for Streamlit chat elements
             with st.chat_message(role):
-                # Now we safely check for the 'text' key before rendering
                 text_content = message.get('text', 'Error: Message content missing.')
                 st.markdown(text_content)
 
@@ -754,7 +913,6 @@ def render_chat_interface(title: str, history_key: str, system_prompt: str, use_
     user_query = st.chat_input("Submit your query...")
 
     if user_query:
-        # 1. Add user message
         user_message = {
             "role": "user",
             "text": user_query,
@@ -762,12 +920,9 @@ def render_chat_interface(title: str, history_key: str, system_prompt: str, use_
         }
         st.session_state[history_key].append(user_message)
         
-        # 2. Get AI Response
         with st.spinner(f"{title} thinking..."):
-            # This safely returns a dictionary {text: ..., sources: ...}
             ai_response_dict = run_async_ai_call(st.session_state[history_key], system_prompt, use_search)
 
-        # 3. Add assistant message (using the guaranteed dictionary structure)
         assistant_message = {
             "role": "model",
             "text": ai_response_dict.get('text', 'AI response failed.'),
@@ -775,35 +930,181 @@ def render_chat_interface(title: str, history_key: str, system_prompt: str, use_
         }
         st.session_state[history_key].append(assistant_message)
         
+        st.rerun()
+
+# --- NEW RAG CHAT INTERFACE (NOW HYBRID) ---
+
+def render_rag_chat_interface(title: str, history_key: str, collection_name: str, base_system_prompt: str):
+    """
+    Renders a chat interface that uses Retrieval-Augmented Generation (RAG)
+    by querying a ChromaDB collection.
+    
+    --- UPDATED TO "HYBRID" MODE ---
+    Now also enables Google Search (`use_search=True`) and updates the system
+    prompt to instruct the AI on how to use both its internal notes and external search.
+    """
+    st.markdown(f"## {title}")
+    st.markdown(f"<div class='subheader'>Your personal coach, powered by your notes in <strong>'{collection_name}'</strong> (and Google Search).</div>", unsafe_allow_html=True)
+
+    if not st.session_state.chroma_client:
+        st.error("ChromaDB connection not established. Cannot use RAG coach.")
+        return
+        
+    client = st.session_state.chroma_client
+    
+    try:
+        collection = client.get_collection(name=collection_name)
+    except Exception as e:
+        st.error(f"Error: Collection '{collection_name}' not found or ChromaDB error.")
+        st.error(f"Details: {e}")
+        st.info("Please go to the 'Ingest Data' page to create this collection and add your notes.")
+        return
+
+    history = st.session_state[history_key]
+
+    # --- Display Chat History ---
+    with st.container(height=400, border=True):
+        for message in history:
+            role = "user" if message.get('is_user') else "assistant"
+            with st.chat_message(role):
+                text_content = message.get('text', 'Error: Message content missing.')
+                st.markdown(text_content)
+
+    # --- Chat Input and Logic ---
+    user_query = st.chat_input(f"Ask the {title}...")
+
+    if user_query:
+        user_message = {
+            "role": "user",
+            "text": user_query,
+            "is_user": True
+        }
+        st.session_state[history_key].append(user_message)
+        
+        with st.spinner(f"{title} is searching your notes and the web..."):
+            try:
+                # 2. Retrieve relevant documents from ChromaDB
+                st.toast("Searching vector notes...")
+                retrieved_docs = collection.query(
+                    query_texts=[user_query],
+                    n_results=5 
+                )
+                
+                knowledge_chunks = retrieved_docs['documents'][0]
+                
+                if knowledge_chunks:
+                    knowledge = "\n\n---\n\n".join(knowledge_chunks)
+                    knowledge_prompt = f"""
+Here is the relevant internal knowledge I found in your notes:
+---
+{knowledge}
+---
+"""
+                else:
+                    knowledge_prompt = "I couldn't find any relevant information in your internal notes for this specific query."
+                
+                # 3. Construct the final prompt for Gemini
+                final_system_prompt = f"""
+{base_system_prompt}
+
+You have two sources of information:
+1.  **Internal Knowledge (Your Notes):** This is your primary source of truth.
+2.  **External Knowledge (Google Search):** This is your backup for general information.
+
+**Your directive is:**
+First, answer the user's query *only* using the "Internal Knowledge" provided below.
+If that internal knowledge does not contain the answer, and *only* then, use your external Google Search ability to find a general answer.
+Always state whether your answer is from the internal notes or from an external search.
+
+{knowledge_prompt}
+"""
+                
+                # 4. Call the Gemini API (NOW WITH SEARCH ENABLED)
+                st.toast("Sending notes and query to AI...")
+                ai_response_dict = run_async_ai_call(
+                    st.session_state[history_key], 
+                    final_system_prompt, 
+                    use_search=True # <-- THIS IS THE UPGRADE
+                )
+
+                # 5. Add assistant message
+                assistant_message = {
+                    "role": "model",
+                    "text": ai_response_dict.get('text', 'AI response failed.'),
+                    "is_user": False
+                }
+                st.session_state[history_key].append(assistant_message)
+
+            except Exception as e:
+                st.error(f"An error occurred during RAG chat: {e}")
+                assistant_message = {
+                    "role": "model",
+                    "text": f"Sorry, I encountered an error trying to search your notes: {e}",
+                    "is_user": False
+                }
+                st.session_state[history_key].append(assistant_message)
+
         # Rerun to display the new messages
         st.rerun()
+
+
+# --- Render Functions for each AI Coach ---
 
 def render_v3_advisor():
     """Renders the V3 Advisor chat interface."""
     render_chat_interface(
-        title="V3 Advisor", 
+        title="V3 Advisor (General)", 
         history_key='v3_advisor_history', 
-        system_prompt="You are the V3 Advisor, a helpful and analytical coach providing guidance on personal development, productivity, and life planning, always referencing the user's Pillars and Shadows.", 
+        system_prompt="You are the V3 Advisor, a helpful and analytical coach providing guidance on personal development, productivity, and life planning, always referencing the user's Pillars and Shadows. You have access to Google Search.", 
         use_search=True
     )
 
 def render_super_ai():
     """Renders the Super AI interface."""
     render_chat_interface(
-        title="Super AI", 
+        title="Super AI (Analysis)", 
         history_key='super_ai_history', 
-        system_prompt="You are the Super AI. Your role is to analyze complex, unstructured data or queries through the lens of the user's Pillars and Shadows structure, providing deep, actionable insights and strategic analysis.", 
+        system_prompt="You are the Super AI. Your role is to analyze complex, unstructured data or queries through the lens of the user's Pillars and Shadows structure, providing deep, actionable insights and strategic analysis. You have access to Google Search.", 
         use_search=True
     )
 
 def render_bol_academy():
     """Renders the BOL Academy interface."""
     render_chat_interface(
-        title="BOL Academy", 
+        title="BOL Academy (Tutor)", 
         history_key='bol_academy_history', 
         system_prompt="You are the BOL Academy dedicated tutor for the 21 Brotherhood of Light Courses, guiding the user through lessons on occultism, inner plane theory, and psychic phenomena.", 
-        use_search=False
+        use_search=False # Keep this one firewalled, as it's a specific tutor
     )
+
+def render_business_coach():
+    """Renders the Business Coach RAG interface."""
+    render_rag_chat_interface(
+        title="💼 Business Coach (Hybrid)",
+        history_key='business_coach_history',
+        collection_name='business_coach_notes', # This MUST match the collection name from ingestion
+        base_system_prompt="You are the V3 Business Coach for the 'Phoenix Boss of Antares'. Your role is to provide specific, actionable business advice. Your primary duty is to use the user's internal notes (their 'Sovereign OS') first. If the notes don't have the answer, use Google Search as a backup."
+    )
+
+def render_health_coach():
+    """Renders the Health Coach RAG interface."""
+    render_rag_chat_interface(
+        title="💪 Health Coach (Hybrid)",
+        history_key='health_coach_history',
+        collection_name='health_coach_notes', # This MUST match the collection name from ingestion
+        base_system_prompt="You are the V3 Health Coach for the 'Phoenix Boss of Antares'. Your role is to provide protocols for 'Hardware' stabilization and 'Somatic' integration. Your primary duty is to use the user's internal notes (e.g., 'Dorsal Vagal state', 'Armored Body') first. If the notes don't have the answer, use Google Search as a backup."
+    )
+
+# 4. (TEMPLATE) Create a render function for the new coach
+def render_energy_somatic_coach():
+    """Renders the Energy & Somatic Coach RAG interface."""
+    render_rag_chat_interface(
+        title="⚡ Energy & Somatic Coach (Hybrid)",
+        history_key='energy_somatic_history',
+        collection_name='energy_somatic_notes', # This MUST match the collection name from ingestion
+        base_system_prompt="You are the V3 Energy & Somatic Coach. Your role is to provide protocols for nervous system regulation, breath, and energy projection. Your primary duty is to use the user's internal notes (e.g., 'Polyvagal Theory', 'Somatic Shaking') first. If the notes don't have the answer, use Google Search as a backup."
+    )
+
 
 def render_settings():
     """Renders the Settings page."""
@@ -820,7 +1121,8 @@ def render_settings():
         "APP_ID": APP_ID,
         "User_ID": st.session_state.user_id,
         "GEMINI_MODEL": GEMINI_MODEL,
-        "Firebase_Config_Loaded": bool(firebaseConfig)
+        "Firebase_Config_Loaded": bool(firebaseConfig),
+        "Chroma_Client_Initialized": bool(st.session_state.chroma_client)
     })
     st.info("**AI Key Check:** If you are seeing `403 Forbidden` errors in the chat interfaces, the AI service is not receiving a valid API key. Please ensure your key is correctly set in your execution environment.", icon="🚨")
 
@@ -856,8 +1158,19 @@ def main_app():
         render_super_ai()
     elif st.session_state.page == "BOL Academy":
         render_bol_academy()
+    elif st.session_state.page == "Business Coach":
+        render_business_coach() 
+    elif st.session_state.page == "Health Coach":
+        render_health_coach()
+    # 5. (TEMPLATE) Add the new coach to the router
+    elif st.session_state.page == "Energy & Somatic Coach":
+        render_energy_somatic_coach()
+    elif st.session_state.page == "Ingest Data":
+        render_ingest_data()
     elif st.session_state.page == "Settings":
         render_settings()
+    else:
+        render_dashboard() # Default to dashboard if page not found
 
 # Execute the main app function
 if __name__ == "__main__":
